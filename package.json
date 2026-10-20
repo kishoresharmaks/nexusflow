@@ -1,0 +1,29 @@
+{
+  "name": "commercepilot",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @commercepilot/web --filter @commercepilot/api --filter @commercepilot/worker dev",
+    "dev:web": "pnpm --filter @commercepilot/web dev",
+    "dev:api": "pnpm --filter @commercepilot/api dev",
+    "dev:worker": "pnpm --filter @commercepilot/worker dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:generate": "pnpm --filter @commercepilot/database db:generate",
+    "db:validate": "pnpm --filter @commercepilot/database db:validate"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.13.0",
+    "prettier": "^3.9.10",
+    "typescript-eslint": "^8.71.2"
+  }
+}

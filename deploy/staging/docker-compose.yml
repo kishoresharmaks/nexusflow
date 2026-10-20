@@ -1,0 +1,133 @@
+version: '3.8'
+
+services:
+  mongo-staging:
+    image: mongo:7.0
+    container_name: commercepilot-mongo-staging
+    restart: unless-stopped
+    command: ['--replSet', 'rs0', '--bind_ip_all']
+    environment:
+      MONGO_INITDB_DATABASE: commercepilot_staging
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo_staging_data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-staging:
+    image: redis:7.2-alpine
+    container_name: commercepilot-redis-staging
+    restart: unless-stopped
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--requirepass',
+        '${REDIS_STAGING_PASSWORD:-staging-redis-secure-pass}',
+      ]
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_staging_data:/data
+    healthcheck:
+      test:
+        ['CMD', 'redis-cli', '-a', '${REDIS_STAGING_PASSWORD:-staging-redis-secure-pass}', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-staging:
+    image: minio/minio:RELEASE.2024-03-03T17-50-39Z
+    container_name: commercepilot-minio-staging
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_STAGING_ROOT_USER:-staging-minio-admin}
+      MINIO_ROOT_PASSWORD: ${S3_STAGING_ROOT_PASSWORD:-staging-minio-secure-password}
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio_staging_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  api-staging:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: commercepilot-api-staging
+    restart: unless-stopped
+    depends_on:
+      mongo-staging:
+        condition: service_healthy
+      redis-staging:
+        condition: service_healthy
+      minio-staging:
+        condition: service_healthy
+    environment:
+      NODE_ENV: staging
+      PORT: 4000
+      DATABASE_URL: mongodb://mongo-staging:27017/commercepilot_staging?replicaSet=rs0&directConnection=true
+      REDIS_URL: redis://:${REDIS_STAGING_PASSWORD:-staging-redis-secure-pass}@redis-staging:6379
+      WEB_URL: http://staging.commercepilot.test:3000
+      CORS_ORIGINS: http://staging.commercepilot.test:3000
+      SESSION_SECRET: ${STAGING_SESSION_SECRET:-staging-session-secret-min-32-chars-long!}
+      TOKEN_ENCRYPTION_KEY: ${STAGING_TOKEN_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      S3_ENDPOINT: http://minio-staging:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: commercepilot-staging-media
+      S3_ACCESS_KEY_ID: ${S3_STAGING_ROOT_USER:-staging-minio-admin}
+      S3_SECRET_ACCESS_KEY: ${S3_STAGING_ROOT_PASSWORD:-staging-minio-secure-password}
+    ports:
+      - '4000:4000'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:4000/api/v1/health']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker-staging:
+    build:
+      context: ../..
+      dockerfile: apps/worker/Dockerfile
+    container_name: commercepilot-worker-staging
+    restart: unless-stopped
+    depends_on:
+      mongo-staging:
+        condition: service_healthy
+      redis-staging:
+        condition: service_healthy
+    environment:
+      NODE_ENV: staging
+      DATABASE_URL: mongodb://mongo-staging:27017/commercepilot_staging?replicaSet=rs0&directConnection=true
+      REDIS_URL: redis://:${REDIS_STAGING_PASSWORD:-staging-redis-secure-pass}@redis-staging:6379
+      TOKEN_ENCRYPTION_KEY: ${STAGING_TOKEN_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+
+  web-staging:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    container_name: commercepilot-web-staging
+    restart: unless-stopped
+    depends_on:
+      api-staging:
+        condition: service_healthy
+    environment:
+      NODE_ENV: staging
+      NEXT_PUBLIC_API_URL: http://staging.commercepilot.test:4000/api/v1
+    ports:
+      - '3000:3000'
+
+volumes:
+  mongo_staging_data:
+  redis_staging_data:
+  minio_staging_data:

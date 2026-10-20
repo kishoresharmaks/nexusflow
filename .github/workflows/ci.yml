@@ -1,0 +1,98 @@
+name: CI Quality Gate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: Secret & Credential Safety
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify no raw environment files or private keys are tracked
+        run: |
+          echo "Verifying no forbidden secret files are tracked in git..."
+          FORBIDDEN=$(git ls-files | grep -E '^(\.env|\.env\.local|\.env\.production|.*\.pem|.*\.key|credentials/.*)$' || true)
+          if [ -n "$FORBIDDEN" ]; then
+            echo "ERROR: Tracked forbidden secret files detected:"
+            echo "$FORBIDDEN"
+            exit 1
+          fi
+          echo "Zero forbidden secret files tracked."
+
+  verify-build-and-test:
+    name: Build, Lint, Typecheck, and Test
+    runs-on: ubuntu-latest
+    needs: secret-scan
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+          run_install: false
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate and generate Prisma client
+        run: |
+          pnpm db:validate
+          pnpm db:generate
+
+      - name: Check code formatting
+        run: pnpm format:check
+
+      - name: Run Linter
+        run: pnpm lint
+
+      - name: Run TypeScript typecheck
+        run: pnpm typecheck
+
+      - name: Run Test Suite
+        run: pnpm test
+        env:
+          NODE_ENV: test
+          SESSION_SECRET: test-session-secret-32-chars-long-minimum!
+          TOKEN_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          RAZORPAY_WEBHOOK_SECRET: commercepilot-default-webhook-secret-key-32
+          WEBHOOK_SECRET: commercepilot-default-webhook-secret-key-32
+
+      - name: Production Build
+        run: pnpm build
