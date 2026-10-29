@@ -58,6 +58,10 @@ describe('MediaService', () => {
       mockAuditService as AuditService,
       mockConfigService as ConfigService,
     );
+    (service as any).s3Client.send = vi.fn().mockResolvedValue({
+      ContentLength: 2048,
+      ContentType: 'image/png',
+    });
   });
 
   describe('generatePresignedUploadUrl', () => {
@@ -142,60 +146,6 @@ describe('MediaService', () => {
     });
   });
 
-  describe('uploadLocalFile', () => {
-    it('saves file buffer locally and creates media asset record', async () => {
-      const mockFile = {
-        originalname: 'summer-shoes.png',
-        mimetype: 'image/png',
-        size: 2048,
-        buffer: Buffer.from('fake-image-bytes'),
-      };
-
-      const asset = await service.uploadLocalFile(workspaceId, mockFile, userId, '127.0.0.1');
-
-      expect(asset.id).toBe(assetId);
-      expect(asset.url).toContain(`/api/v1/media/${workspaceId}/${assetId}/file`);
-      expect(mockPrisma.mediaAsset.create).toHaveBeenCalled();
-      expect(mockPrisma.mediaAsset.update).toHaveBeenCalled();
-      expect(mockAuditService.record).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'MEDIA_ASSET_UPLOADED',
-          metadata: expect.objectContaining({ storage: 'local' }),
-        }),
-      );
-    });
-
-    it('rejects upload without buffer', async () => {
-      await expect(
-        service.uploadLocalFile(
-          workspaceId,
-          { originalname: 'test.png', mimetype: 'image/png', size: 0, buffer: null as any },
-          userId,
-        ),
-      ).rejects.toThrow(BadRequestException);
-    });
-  });
-
-  describe('getLocalFile', () => {
-    it('throws NotFoundException when media asset does not exist', async () => {
-      mockPrisma.mediaAsset.findFirst.mockResolvedValue(null);
-
-      await expect(service.getLocalFile(workspaceId, assetId)).rejects.toThrow(NotFoundException);
-    });
-
-    it('throws NotFoundException when file does not exist on disk', async () => {
-      mockPrisma.mediaAsset.findFirst.mockResolvedValue({
-        id: assetId,
-        workspaceId,
-        storageKey: `workspaces/${workspaceId}/media/missing-file.png`,
-        mimeType: 'image/png',
-        originalFilename: 'missing-file.png',
-      });
-
-      await expect(service.getLocalFile(workspaceId, assetId)).rejects.toThrow(NotFoundException);
-    });
-  });
-
   describe('listAssets', () => {
     it('returns media assets isolated to workspace', async () => {
       mockPrisma.mediaAsset.findMany.mockResolvedValue([
@@ -263,6 +213,25 @@ describe('MediaService', () => {
     });
   });
 
+  it('fails closed when object storage credentials are absent', async () => {
+    const previous = ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'].map((key) => [key, process.env[key]] as const);
+    try {
+      for (const [key] of previous) delete process.env[key];
+      const unconfigured = new MediaService(
+        mockPrisma as PrismaService,
+        mockAuditService as AuditService,
+        { get: vi.fn() } as unknown as ConfigService,
+      );
+      await expect(unconfigured.generatePresignedUploadUrl(workspaceId, {
+        filename: 'photo.png', mimeType: 'image/png', fileSizeBytes: 10,
+      })).rejects.toThrow('Private object storage is not configured');
+    } finally {
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  });
+
   describe('validateMediaForProvider', () => {
     it('validates supported media formats and sizes for Instagram', () => {
       const valid = service.validateMediaForProvider(
@@ -300,5 +269,6 @@ describe('MediaService', () => {
       expect(tooLarge.valid).toBe(false);
       expect(tooLarge.reason).toContain('exceeds Facebook limit of 50MB');
     });
+
   });
 });

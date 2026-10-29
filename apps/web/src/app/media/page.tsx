@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useAuth } from '../../context/auth-context';
 import { api, type MediaAssetItem } from '../../lib/api';
@@ -30,24 +30,26 @@ export default function MediaLibraryPage() {
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const fetchMedia = useCallback(async () => {
-    if (!currentWorkspace?.id || !token) return;
-    setIsLoading(true);
-    try {
-      const items = await api.getMediaAssets(currentWorkspace.id);
-      setMediaList(items);
-    } catch {
-      // Handled silently
-    } finally {
-      setIsLoading(false);
-    }
-  }, [currentWorkspace?.id, token]);
-
   useEffect(() => {
+    let isMounted = true;
     if (currentWorkspace?.id && token) {
-      void fetchMedia();
+      setIsLoading(true);
+      void api
+        .getMediaAssets(currentWorkspace.id)
+        .then((items) => {
+          if (isMounted) setMediaList(items);
+        })
+        .catch(() => {
+          // Handled silently
+        })
+        .finally(() => {
+          if (isMounted) setIsLoading(false);
+        });
     }
-  }, [fetchMedia, currentWorkspace?.id, token]);
+    return () => {
+      isMounted = false;
+    };
+  }, [currentWorkspace?.id, token]);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes >= 1024 * 1024) {
@@ -203,21 +205,21 @@ export default function MediaLibraryPage() {
 
         {/* Tenant Isolation Banner */}
         <div className="p-4 rounded-xl bg-white border border-[#E4E7EC] flex items-center justify-between shadow-sm">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-lg bg-[#16803C]/10 text-[#16803C] flex items-center justify-center">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-[#16803C]/10 text-[#16803C] flex items-center justify-center shrink-0">
               <FolderLock className="w-4 h-4" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-xs font-bold text-[#17202A]">Strict Tenant Storage Isolation</h2>
-              <p className="text-[11px] text-[#667085]">
+              <p className="text-[11px] text-[#667085] truncate sm:whitespace-normal">
                 All assets are encrypted at rest and scoped under prefix:{' '}
-                <code className="bg-[#F2F4F7] px-1 py-0.5 rounded font-mono text-[#344054]">
+                <code className="bg-[#F2F4F7] px-1 py-0.5 rounded font-mono text-[#344054] break-all">
                   workspaces/{currentWorkspace?.id || 'workspace'}/media/*
                 </code>
               </p>
             </div>
           </div>
-          <span className="hidden md:inline-flex items-center px-2 py-1 rounded text-[11px] font-semibold text-[#16803C] bg-[#16803C]/10">
+          <span className="hidden md:inline-flex items-center px-2 py-1 rounded text-[11px] font-semibold text-[#16803C] bg-[#16803C]/10 shrink-0">
             <ShieldCheck className="w-3.5 h-3.5 mr-1" />
             Verified Secure
           </span>

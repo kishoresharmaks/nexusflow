@@ -1,4 +1,4 @@
-import { Worker, type Job } from 'bullmq';
+import { Worker, Queue, type Job } from 'bullmq';
 import Redis from 'ioredis';
 import {
   processCatalogImport,
@@ -12,6 +12,19 @@ import {
   processAnalyticsSync,
   type AnalyticsSyncJobData,
 } from '../processors/analytics-sync.processor';
+import {
+  processTokenRefresh,
+  type TokenRefreshJobData,
+} from '../processors/token-refresh.processor';
+import {
+  processEmailNotification,
+  type EmailNotificationJobData,
+} from '../processors/notification.processor';
+import {
+  processDueReconciliations,
+  processReconciliation,
+  type ReconciliationJobData,
+} from '../processors/post-reconciliation.processor';
 import { FallbackScheduler } from '../processors/fallback-scheduler';
 
 export const QUEUE_NAMES = {
@@ -20,6 +33,7 @@ export const QUEUE_NAMES = {
   POST_PUBLISHING: 'post-publishing',
   POST_RECONCILIATION: 'post-reconciliation',
   ANALYTICS_SYNC: 'analytics-sync',
+  TOKEN_REFRESH: 'token-refresh',
   REPORTS: 'reports',
   NOTIFICATIONS: 'notifications',
 } as const;
@@ -130,7 +144,143 @@ export class QueueManager {
         },
       );
 
-      this.workers.push(catalogWorker, publishingWorker, analyticsWorker);
+      // 4. Register Token Refresh Worker
+      const tokenRefreshWorker = new Worker<TokenRefreshJobData>(
+        QUEUE_NAMES.TOKEN_REFRESH,
+        async (job: Job<TokenRefreshJobData>) => {
+          console.log(
+            JSON.stringify({
+              level: 'info',
+              message: `Processing token refresh job ${job.id}`,
+              workspaceId: job.data?.workspaceId,
+              daysThreshold: job.data?.daysThreshold,
+              timestamp: new Date().toISOString(),
+            }),
+          );
+          return processTokenRefresh(job.data);
+        },
+        {
+          connection: this.redisConnection,
+          concurrency: 2,
+        },
+      );
+
+      // 5. Register Email Notifications Worker
+      const notificationsWorker = new Worker<EmailNotificationJobData>(
+        QUEUE_NAMES.NOTIFICATIONS,
+        async (job: Job<EmailNotificationJobData>) => {
+          console.log(
+            JSON.stringify({
+              level: 'info',
+              message: `Processing notification job ${job.id}`,
+              to: job.data.to,
+              subject: job.data.subject,
+              timestamp: new Date().toISOString(),
+            }),
+          );
+          return processEmailNotification(job.data);
+        },
+        {
+          connection: this.redisConnection,
+          concurrency: 5,
+        },
+      );
+
+      // 6. Register Post Reconciliation Worker (verifies ambiguous publish outcomes)
+      const reconciliationWorker = new Worker<ReconciliationJobData>(
+        QUEUE_NAMES.POST_RECONCILIATION,
+        async (job: Job<ReconciliationJobData>) => {
+          if (job.data?.postId) {
+            console.log(
+              JSON.stringify({
+                level: 'info',
+                message: `Processing post reconciliation job ${job.id}`,
+                postId: job.data.postId,
+                workspaceId: job.data.workspaceId,
+                timestamp: new Date().toISOString(),
+              }),
+            );
+            return processReconciliation(job.data);
+          }
+          console.log(
+            JSON.stringify({
+              level: 'info',
+              message: `Running post reconciliation scan ${job.id}`,
+              timestamp: new Date().toISOString(),
+            }),
+          );
+          return processDueReconciliations();
+        },
+        {
+          connection: this.redisConnection,
+          concurrency: 2,
+        },
+      );
+
+      this.workers.push(
+        catalogWorker,
+        publishingWorker,
+        analyticsWorker,
+        tokenRefreshWorker,
+        notificationsWorker,
+        reconciliationWorker,
+      );
+
+      // Register repeatable BullMQ token refresh cron job (every 6 hours)
+      try {
+        const tokenQueue = new Queue(QUEUE_NAMES.TOKEN_REFRESH, {
+          connection: this.redisConnection,
+        });
+        await tokenQueue.add(
+          'periodic-token-refresh',
+          { daysThreshold: 7 },
+          {
+            repeat: {
+              pattern: '0 */6 * * *',
+            },
+            jobId: 'scheduled-token-refresh-cron',
+            removeOnComplete: true,
+          },
+        );
+        await tokenQueue.close();
+      } catch (cronErr) {
+        console.warn(
+          JSON.stringify({
+            level: 'warn',
+            message: 'Failed to schedule BullMQ repeatable token refresh cron job',
+            error: (cronErr as Error).message,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      }
+
+      // Register repeatable BullMQ reconciliation scan cron job (every 2 minutes)
+      try {
+        const reconciliationQueue = new Queue(QUEUE_NAMES.POST_RECONCILIATION, {
+          connection: this.redisConnection,
+        });
+        await reconciliationQueue.add(
+          'scan-reconciliation',
+          {},
+          {
+            repeat: {
+              pattern: '*/2 * * * *',
+            },
+            jobId: 'scheduled-reconciliation-scan',
+            removeOnComplete: true,
+          },
+        );
+        await reconciliationQueue.close();
+      } catch (cronErr) {
+        console.warn(
+          JSON.stringify({
+            level: 'warn',
+            message: 'Failed to schedule BullMQ repeatable reconciliation scan cron job',
+            error: (cronErr as Error).message,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      }
 
       console.log(
         JSON.stringify({
@@ -141,6 +291,8 @@ export class QueueManager {
             QUEUE_NAMES.CATALOG_IMPORT,
             QUEUE_NAMES.POST_PUBLISHING,
             QUEUE_NAMES.ANALYTICS_SYNC,
+            QUEUE_NAMES.TOKEN_REFRESH,
+            QUEUE_NAMES.POST_RECONCILIATION,
           ],
           timestamp: new Date().toISOString(),
         }),

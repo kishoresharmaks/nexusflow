@@ -1,0 +1,48 @@
+{
+  "storeName": "NexusFlow Official Demo Store",
+  "products": [
+    {
+      "sourceId": "PROD-HEADPHONES-900",
+      "sku": "WH-1000XM5-BLK",
+      "title": "Wireless Active Noise-Canceling Headphones",
+      "description": "Industry-leading noise cancelation with dual processors and 8 microphones. Ultra-comfortable lightweight design with soft fit leather.",
+      "priceCents": 39999,
+      "currency": "USD",
+      "inventoryCount": 45,
+      "url": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800",
+      "images": [
+        "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800",
+        "https://images.unsplash.com/photo-1484704849700-f032a568e944?w=800"
+      ],
+      "tags": ["Audio", "Headphones", "Electronics", "Flagship"]
+    },
+    {
+      "sourceId": "PROD-KEYBOARD-101",
+      "sku": "KB-MECH-RGB-01",
+      "title": "Low-Profile Wireless Mechanical Keyboard",
+      "description": "Precision tactile switches, aircraft-grade anodized aluminum frame, and customizable per-key RGB backlighting.",
+      "priceCents": 12900,
+      "currency": "USD",
+      "inventoryCount": 80,
+      "url": "https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=800",
+      "images": [
+        "https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=800"
+      ],
+      "tags": ["Accessories", "Keyboards", "Workstation"]
+    },
+    {
+      "sourceId": "PROD-BACKPACK-404",
+      "sku": "BP-URBAN-COMMUTER",
+      "title": "Water-Resistant Urban Commuter Backpack 24L",
+      "description": "Weatherproof recycled Cordura exterior with dedicated 16-inch padded laptop sleeve and ergonomic breathable back panel.",
+      "priceCents": 8950,
+      "currency": "USD",
+      "inventoryCount": 120,
+      "url": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800",
+      "images": [
+        "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800"
+      ],
+      "tags": ["Bags", "Apparel", "Travel"]
+    }
+  ]
+}

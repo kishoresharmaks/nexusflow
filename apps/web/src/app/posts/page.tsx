@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useAuth } from '../../context/auth-context';
 import { api, type PostItem, type PublishAttemptItem, type PostStatusType } from '../../lib/api';
 import { ProtectedRoute } from '../../components/protected-route';
+import { formatDateTime } from '../../lib/formatters';
 import {
   Send,
   Calendar,
@@ -29,6 +30,7 @@ const STATUS_FILTERS: Array<{ label: string; value: string }> = [
   { label: 'Approved', value: 'APPROVED' },
   { label: 'Scheduled', value: 'SCHEDULED' },
   { label: 'Published', value: 'PUBLISHED' },
+  { label: 'Verifying', value: 'UNKNOWN_OUTCOME' },
   { label: 'Failed', value: 'FAILED' },
   { label: 'Cancelled', value: 'CANCELLED' },
 ];
@@ -245,6 +247,12 @@ export default function PostsPage() {
             <CheckCircle2 className="w-3 h-3 mr-1" /> Published
           </span>
         );
+      case 'UNKNOWN_OUTCOME':
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#FFFAEB] text-[#B54708] border border-[#FEDF89]">
+            <RefreshCw className="w-3 h-3 mr-1" /> Verifying outcome…
+          </span>
+        );
       case 'FAILED':
         return (
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#FEF3F2] text-[#B42318] border border-[#FECDCA]">
@@ -412,14 +420,25 @@ export default function PostsPage() {
                         {post.scheduledAt && (
                           <span className="inline-flex items-center text-[11px] text-[#6941C6] font-medium">
                             <Calendar className="w-3 h-3 mr-1" />
-                            {new Date(post.scheduledAt).toLocaleString()}
+                            {formatDateTime(
+                              post.scheduledAt,
+                              currentWorkspace?.timezone,
+                              currentWorkspace?.locale,
+                              'medium',
+                            )}
                           </span>
                         )}
 
                         {post.publishedAt && (
                           <span className="inline-flex items-center text-[11px] text-[#027A48] font-medium">
                             <Clock className="w-3 h-3 mr-1" />
-                            Published {new Date(post.publishedAt).toLocaleString()}
+                            Published{' '}
+                            {formatDateTime(
+                              post.publishedAt,
+                              currentWorkspace?.timezone,
+                              currentWorkspace?.locale,
+                              'medium',
+                            )}
                           </span>
                         )}
                       </div>
@@ -636,7 +655,7 @@ export default function PostsPage() {
                   </div>
                   <div>
                     <h3 className="text-base font-bold text-[#17202A]">Schedule Post</h3>
-                    <p className="text-xs text-[#667085] mt-0.5">Choose publish date and time — CommercePilot will execute automatically.</p>
+                    <p className="text-xs text-[#667085] mt-0.5">Choose publish date and time — NexusFlow will execute automatically.</p>
                   </div>
                 </div>
                 <button
@@ -652,7 +671,7 @@ export default function PostsPage() {
               <div className="p-6 space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-[#344054] mb-1.5">
-                    Select Publish Date &amp; Time
+                    Select Publish Date &amp; Time ({currentWorkspace?.timezone || 'UTC'})
                   </label>
                   <input
                     type="datetime-local"
@@ -661,7 +680,9 @@ export default function PostsPage() {
                     className="w-full rounded-xl border border-[#E4E7EC] px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#E85D2A]/30 shadow-xs"
                   />
                   <p className="text-[11px] text-[#667085] mt-1.5">
-                    Scheduled in UTC. CommercePilot will publish automatically at the chosen time.
+                    Scheduled in workspace timezone (
+                    <span className="font-semibold text-[#17202A]">{currentWorkspace?.timezone || 'UTC'}</span>
+                    ). NexusFlow will execute publishing automatically.
                   </p>
                 </div>
               </div>
@@ -731,7 +752,9 @@ export default function PostsPage() {
                         className={`p-3.5 rounded-xl border text-xs space-y-1 ${
                           att.status === 'SUCCESS'
                             ? 'bg-[#ECFDF3] border-[#A6F4C5] text-[#027A48]'
-                            : 'bg-[#FEF3F2] border-[#FECDCA] text-[#B42318]'
+                            : att.status === 'UNKNOWN'
+                              ? 'bg-[#FFFAEB] border-[#FEDF89] text-[#B54708]'
+                              : 'bg-[#FEF3F2] border-[#FECDCA] text-[#B42318]'
                         }`}
                       >
                         <div className="flex items-center justify-between font-bold">
@@ -749,9 +772,16 @@ export default function PostsPage() {
                           </p>
                         )}
                         <div className="flex items-center justify-between text-[10px] opacity-75 pt-1">
-                          <span>{new Date(att.attemptedAt).toLocaleString()}</span>
                           <span>
-                            Classification: {att.isTransient ? 'Transient (Retryable)' : 'Permanent'}
+                            {formatDateTime(
+                              att.attemptedAt,
+                              currentWorkspace?.timezone,
+                              currentWorkspace?.locale,
+                              'medium',
+                            )}
+                          </span>
+                          <span>
+                            Classification: {att.status === 'UNKNOWN' ? 'Unknown (Verifying)' : att.isTransient ? 'Transient (Retryable)' : 'Permanent'}
                           </span>
                         </div>
                       </div>

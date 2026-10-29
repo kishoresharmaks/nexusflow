@@ -46,7 +46,7 @@ describe('E2E LinkedIn OAuth 2.0 Integration & Publishing Flow', () => {
     prisma = app.get<PrismaService>(PrismaService);
 
     // 1. Setup Tenant 1
-    const t1Email = `li_seller1_${Date.now()}@commercepilot.test`;
+    const t1Email = `li_seller1_${Date.now()}@nexusflow.test`;
     const t1Res = await fetch(`${serverOrigin}/api/v1/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -68,7 +68,7 @@ describe('E2E LinkedIn OAuth 2.0 Integration & Publishing Flow', () => {
     tenant1WorkspaceId = t1Workspaces[0]!.id;
 
     // 2. Setup Tenant 2 (For Cross-Tenant Boundary testing)
-    const t2Email = `li_seller2_${Date.now()}@commercepilot.test`;
+    const t2Email = `li_seller2_${Date.now()}@nexusflow.test`;
     const t2Res = await fetch(`${serverOrigin}/api/v1/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -183,7 +183,7 @@ describe('E2E LinkedIn OAuth 2.0 Integration & Publishing Flow', () => {
     expect(callbackRes.status).toBe(302);
     const location = callbackRes.headers.get('location');
     expect(location).toContain('linkedin=connected');
-    expect(location).toContain('name=CommercePilot%20LinkedIn%20Member');
+    expect(location).toContain('name=NexusFlow%20LinkedIn%20Member');
 
     // Verify account exists in database for tenant 1
     const account = await prisma.socialAccount.findFirst({
@@ -195,7 +195,7 @@ describe('E2E LinkedIn OAuth 2.0 Integration & Publishing Flow', () => {
 
     expect(account).toBeDefined();
     expect(account!.providerAccountId).toBe('li_mock_member_782bb4');
-    expect(account!.displayName).toBe('CommercePilot LinkedIn Member');
+    expect(account!.displayName).toBe('NexusFlow LinkedIn Member');
     expect(account!.status).toBe(SocialAccountStatus.ACTIVE);
     expect(account!.encryptedAccessToken).not.toContain('mock_li_token_'); // Encrypted!
     expect(account!.scopes).toContain('w_member_social');
@@ -218,7 +218,7 @@ describe('E2E LinkedIn OAuth 2.0 Integration & Publishing Flow', () => {
 
     expect(body.connected).toBe(true);
     expect(body.canPublish).toBe(true);
-    expect(body.account?.displayName).toBe('CommercePilot LinkedIn Member');
+    expect(body.account?.displayName).toBe('NexusFlow LinkedIn Member');
     expect(body.account?.scopes).toContain('w_member_social');
     expect((body.account as any).encryptedAccessToken).toBeUndefined();
   });
@@ -232,7 +232,7 @@ describe('E2E LinkedIn OAuth 2.0 Integration & Publishing Flow', () => {
       },
       body: JSON.stringify({
         workspaceId: tenant1WorkspaceId,
-        content: 'Excited to announce our new product catalog launch with CommercePilot!',
+        content: 'Excited to announce our new product catalog launch with NexusFlow!',
       }),
     });
 

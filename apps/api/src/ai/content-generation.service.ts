@@ -134,7 +134,7 @@ export class ContentGenerationService {
     // 5. Construct Grounding Prompt
     const channel = (dto.channel || 'INSTAGRAM').toUpperCase();
     const systemPrompt =
-      `You are an expert commerce marketing copywriter for CommercePilot.\n` +
+      `You are an expert commerce marketing copywriter for NexusFlow.\n` +
       `Your task is to write engaging, high-converting social media marketing copy strictly grounded in verified product facts.\n` +
       `CRITICAL INTEGRITY RULES:\n` +
       `1. Rely ONLY on the product title, price, description, and stock status provided.\n` +

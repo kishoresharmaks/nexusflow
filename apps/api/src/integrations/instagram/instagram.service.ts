@@ -736,7 +736,7 @@ export class InstagramIntegrationService {
     }
 
     const currentAccessToken = decryptToken(account.encryptedAccessToken);
-    let newAccessToken = currentAccessToken;
+    let newAccessToken: string;
     let expiresInSeconds = 5184000; // 60 days default
 
     if (

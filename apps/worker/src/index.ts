@@ -24,7 +24,7 @@ async function bootstrap(): Promise<void> {
   console.log(
     JSON.stringify({
       level: 'info',
-      message: 'CommercePilot Background Worker starting...',
+      message: 'NexusFlow Background Worker starting...',
       environment: process.env['NODE_ENV'] || 'development',
       timestamp: new Date().toISOString(),
     }),

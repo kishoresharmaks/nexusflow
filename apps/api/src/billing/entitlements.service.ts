@@ -1,13 +1,17 @@
-import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
-import { BILLING_PLANS, PlanEntitlements } from './billing-plans';
+import { PlanEntitlements } from './billing-plans';
+import { BillingService } from './billing.service';
 import { Subscription, SubscriptionStatus } from '@commercepilot/database';
 
 @Injectable()
 export class EntitlementsService {
   private readonly logger = new Logger(EntitlementsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly billingService: BillingService,
+  ) {}
 
   /**
    * Retrieves active subscription and corresponding plan entitlements.
@@ -24,8 +28,16 @@ export class EntitlementsService {
       orderBy: { createdAt: 'desc' },
     });
 
+    if (!this.billingService.isPlanConfigurationAvailable()) {
+      throw new ServiceUnavailableException(
+        'Plan configuration is unavailable; entitlements cannot be authoritatively enforced.',
+      );
+    }
     const planKey = (sub?.planId || 'FREE').toUpperCase();
-    const plan = BILLING_PLANS[planKey] ?? BILLING_PLANS.FREE!;
+    const plan = this.billingService.getPlan(planKey);
+    if (!plan) {
+      throw new ServiceUnavailableException(`Plan configuration for ${planKey} is unavailable.`);
+    }
 
     // If no DB subscription exists, construct virtual trial subscription
     const subscription: Subscription = sub ?? {

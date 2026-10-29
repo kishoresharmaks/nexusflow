@@ -52,8 +52,40 @@ export class WorkspaceGuard implements CanActivate {
       throw new ForbiddenException('Access denied. You are not a member of this workspace.');
     }
 
+    if (membership.status === 'SUSPENDED') {
+      throw new ForbiddenException(
+        `Your membership in this workspace has been suspended${membership.suspensionReason ? `: ${membership.suspensionReason}` : ''}. Please contact a workspace administrator.`,
+      );
+    }
+
+    if (membership.status === 'REMOVED') {
+      throw new ForbiddenException('Access denied. You are no longer a member of this workspace.');
+    }
+
+    if (membership.status === 'PENDING_ACCEPTANCE') {
+      throw new ForbiddenException('Access denied. Your membership in this workspace is pending acceptance or account activation.');
+    }
+
+    if (user.accountStatus === 'SUSPENDED' || user.isSuspended) {
+      throw new ForbiddenException('Your account has been suspended platform-wide.');
+    }
+
+    if (user.accountStatus === 'DEACTIVATED') {
+      throw new ForbiddenException('Your account has been deactivated.');
+    }
+
+    if (user.accountStatus === 'PENDING_ACTIVATION') {
+      throw new ForbiddenException('Your account is pending activation. Please complete account activation first.');
+    }
+
     if (!membership.workspace) {
       throw new NotFoundException('Workspace not found.');
+    }
+
+    if (membership.workspace.status === 'SUSPENDED') {
+      throw new ForbiddenException(
+        `This workspace has been suspended${membership.workspace.suspensionReason ? `: ${membership.workspace.suspensionReason}` : ''}. Contact platform support.`,
+      );
     }
 
     request.membership = membership;

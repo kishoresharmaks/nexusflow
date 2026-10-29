@@ -10,8 +10,10 @@ import {
   type SocialAccountItem,
   type MediaAssetItem,
   type SocialProviderType,
+  type CampaignItem,
 } from '../../lib/api';
 import { ProtectedRoute } from '../../components/protected-route';
+import { formatCurrency } from '../../lib/formatters';
 import {
   Sparkles,
   Send,
@@ -31,6 +33,7 @@ import {
   Share2,
   Heart,
   Repeat2,
+  Flag,
 } from 'lucide-react';
 
 const PLATFORM_CONFIGS: Record<
@@ -102,9 +105,11 @@ export default function ComposerPage() {
   const [content, setContent] = useState<string>('');
   const [mediaUrls, setMediaUrls] = useState<string[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<string>('');
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>('');
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
 
   const [products, setProducts] = useState<ProductItem[]>([]);
+  const [campaigns, setCampaigns] = useState<CampaignItem[]>([]);
   const [socialAccounts, setSocialAccounts] = useState<SocialAccountItem[]>([]);
   const [mediaAssets, setMediaAssets] = useState<MediaAssetItem[]>([]);
 
@@ -124,16 +129,18 @@ export default function ComposerPage() {
     const loadResources = async () => {
       setIsLoading(true);
       try {
-        const [prodRes, accRes, mediaRes] = await Promise.all([
+        const [prodRes, accRes, mediaRes, campRes] = await Promise.all([
           api.getProducts(currentWorkspace.id, { limit: 50 }),
           api.getSocialAccounts(currentWorkspace.id),
           api.getMediaAssets(currentWorkspace.id),
+          api.getCampaigns(currentWorkspace.id),
         ]);
 
         if (!mounted) return;
         setProducts(prodRes.items);
         setSocialAccounts(accRes);
         setMediaAssets(mediaRes);
+        setCampaigns(campRes);
 
         // Pre-select account matching platform if exists
         const matchingAcc = accRes.find((a) => a.provider === selectedPlatform);
@@ -166,6 +173,13 @@ export default function ComposerPage() {
   const isOverHashtagLimit = hashtagCount > config.maxHashtags;
 
   const selectedProduct = products.find((p) => p.id === selectedProductId);
+  const previewImage = mediaUrls[0] || selectedProduct?.images?.[0];
+
+  const getPayloadMediaUrls = (): string[] => {
+    if (mediaUrls.length > 0) return mediaUrls;
+    const firstImg = selectedProduct?.images?.[0];
+    return firstImg ? [firstImg] : [];
+  };
 
   const handleSaveDraft = async () => {
     if (!currentWorkspace?.id) return;
@@ -179,8 +193,9 @@ export default function ComposerPage() {
     try {
       const post = await api.createPost(currentWorkspace.id, {
         content: content.trim(),
-        mediaUrls,
+        mediaUrls: getPayloadMediaUrls(),
         productId: selectedProductId || undefined,
+        campaignId: selectedCampaignId || undefined,
         socialAccountId: selectedAccountId || undefined,
       });
 
@@ -208,8 +223,9 @@ export default function ComposerPage() {
     try {
       const post = await api.createPost(currentWorkspace.id, {
         content: content.trim(),
-        mediaUrls,
+        mediaUrls: getPayloadMediaUrls(),
         productId: selectedProductId || undefined,
+        campaignId: selectedCampaignId || undefined,
         socialAccountId: selectedAccountId || undefined,
       });
 
@@ -242,8 +258,9 @@ export default function ComposerPage() {
     try {
       const post = await api.createPost(currentWorkspace.id, {
         content: content.trim(),
-        mediaUrls,
+        mediaUrls: getPayloadMediaUrls(),
         productId: selectedProductId || undefined,
+        campaignId: selectedCampaignId || undefined,
         socialAccountId: selectedAccountId || undefined,
       });
 
@@ -283,8 +300,9 @@ export default function ComposerPage() {
     try {
       const post = await api.createPost(currentWorkspace.id, {
         content: content.trim(),
-        mediaUrls,
+        mediaUrls: getPayloadMediaUrls(),
         productId: selectedProductId || undefined,
+        campaignId: selectedCampaignId || undefined,
         socialAccountId: selectedAccountId || undefined,
       });
 
@@ -421,25 +439,42 @@ export default function ComposerPage() {
                 }`}
               />
 
-              {/* Quick Actions to Ground Product */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+              {/* Quick Actions to Ground Product & Campaign */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
                 <div>
-                  <label className="block text-[11px] font-semibold text-[#667085] mb-1">
+                  <label htmlFor="product-select" className="block text-[11px] font-semibold text-[#667085] mb-1">
                     Link Product from Catalog
                   </label>
                   <select
+                    id="product-select"
                     value={selectedProductId}
                     onChange={(e) => {
-                      setSelectedProductId(e.target.value);
-                      const prod = products.find((p) => p.id === e.target.value);
-                      if (prod && !content) {
-                        setContent(
-                          `Meet the ${prod.title}! Priced at $${(prod.priceCents / 100).toFixed(
-                            2,
-                          )}. ${prod.description || ''} #shop #new`,
-                        );
-                        if (prod.images[0]) {
-                          setMediaUrls([prod.images[0]]);
+                      const newId = e.target.value;
+                      setSelectedProductId(newId);
+                      const prod = products.find((p) => p.id === newId);
+                      if (prod) {
+                        // Immediately attach newly selected product image
+                        const primaryImg = prod.images?.[0];
+                        if (primaryImg) {
+                          setMediaUrls([primaryImg]);
+                        } else {
+                          setMediaUrls([]);
+                        }
+
+                        // Auto-populate or refresh copy if blank or if previous auto-generated template was used
+                        if (!content || content.startsWith('Meet the ')) {
+                          setContent(
+                            `Meet the ${prod.title}! Priced at ${formatCurrency(
+                              prod.priceCents,
+                              prod.currency,
+                              currentWorkspace?.locale,
+                            )}. ${prod.description || ''} #shop #new`,
+                          );
+                        }
+                      } else {
+                        // Product unlinked: clear media if it belonged to previous product
+                        if (selectedProduct && mediaUrls[0] === selectedProduct.images[0]) {
+                          setMediaUrls([]);
                         }
                       }
                     }}
@@ -448,17 +483,37 @@ export default function ComposerPage() {
                     <option value="">No product linked</option>
                     {products.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.title} (${(p.priceCents / 100).toFixed(2)})
+                        {p.title} ({formatCurrency(p.priceCents, p.currency, currentWorkspace?.locale)})
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-[#667085] mb-1">
+                  <label htmlFor="campaign-select" className="block text-[11px] font-semibold text-[#667085] mb-1">
+                    Link Campaign (Attribution)
+                  </label>
+                  <select
+                    id="campaign-select"
+                    value={selectedCampaignId}
+                    onChange={(e) => setSelectedCampaignId(e.target.value)}
+                    className="w-full text-xs p-2 bg-[#F7F8FA] border border-[#D0D5DD] rounded-lg outline-none cursor-pointer"
+                  >
+                    <option value="">No campaign linked</option>
+                    {campaigns.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.utmCampaign || 'auto'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="social-account-select" className="block text-[11px] font-semibold text-[#667085] mb-1">
                     Target Social Account
                   </label>
                   <select
+                    id="social-account-select"
                     value={selectedAccountId}
                     onChange={(e) => setSelectedAccountId(e.target.value)}
                     className="w-full text-xs p-2 bg-[#F7F8FA] border border-[#D0D5DD] rounded-lg outline-none cursor-pointer"
@@ -621,9 +676,7 @@ export default function ComposerPage() {
                 <div className="p-3 flex items-center justify-between border-b border-[#F2F4F7]">
                   <div className="flex items-center space-x-2.5">
                     <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-600 p-[1.5px]">
-                      <div className="w-full h-full bg-white rounded-full flex items-center justify-center text-[10px] font-bold">
-                        CP
-                      </div>
+                      <div className="w-full h-full bg-white rounded-full flex items-center justify-center text-[10px] font-bold">NF</div>
                     </div>
                     <div>
                       <p className="text-xs font-bold text-[#262626]">
@@ -637,9 +690,9 @@ export default function ComposerPage() {
 
                 {/* Media Image */}
                 <div className="w-full aspect-square bg-[#F7F8FA] flex items-center justify-center overflow-hidden">
-                  {mediaUrls[0] ? (
+                  {previewImage ? (
                     <img
-                      src={api.resolveMediaUrl(mediaUrls[0])}
+                      src={api.resolveMediaUrl(previewImage)}
                       alt="Post media"
                       className="w-full h-full object-cover"
                     />
@@ -647,7 +700,7 @@ export default function ComposerPage() {
                     <div className="text-center p-6">
                       <ImageIcon className="w-10 h-10 text-[#C7C7C7] mx-auto mb-2" />
                       <p className="text-xs text-[#8E8E8E]">
-                        Select media to complete Instagram Feed preview
+                        Select media or link a product to complete Instagram Feed preview
                       </p>
                     </div>
                   )}
@@ -678,12 +731,10 @@ export default function ComposerPage() {
             {selectedPlatform === 'LINKEDIN' && (
               <div className="bg-white border border-[#E0E0E0] rounded-xl shadow-sm p-4 space-y-3 max-w-sm mx-auto">
                 <div className="flex items-center space-x-2.5">
-                  <div className="w-9 h-9 rounded-full bg-[#0A66C2] text-white flex items-center justify-center font-bold text-xs">
-                    CP
-                  </div>
+                  <div className="w-9 h-9 rounded-full bg-[#0A66C2] text-white flex items-center justify-center font-bold text-xs">NF</div>
                   <div>
                     <p className="text-xs font-bold text-[#191919]">
-                      {currentWorkspace?.name || 'CommercePilot Seller'}
+                      {currentWorkspace?.name || 'NexusFlow Seller'}
                     </p>
                     <p className="text-[10px] text-[#666666]">
                       Official Verified Company • Just now
@@ -695,10 +746,10 @@ export default function ComposerPage() {
                   {content || 'Professional announcement copy grounded in catalog inventory.'}
                 </p>
 
-                {mediaUrls[0] && (
+                {previewImage && (
                   <div className="w-full aspect-video rounded-lg overflow-hidden border border-[#E0E0E0]">
                     <img
-                      src={api.resolveMediaUrl(mediaUrls[0])}
+                      src={api.resolveMediaUrl(previewImage)}
                       alt="Attached media"
                       className="w-full h-full object-cover"
                     />
@@ -742,10 +793,10 @@ export default function ComposerPage() {
                   {content || 'Short, high-converting tweet within 280 characters.'}
                 </p>
 
-                {mediaUrls[0] && (
+                {previewImage && (
                   <div className="w-full aspect-video rounded-xl overflow-hidden border border-[#CFD9DE]">
                     <img
-                      src={api.resolveMediaUrl(mediaUrls[0])}
+                      src={api.resolveMediaUrl(previewImage)}
                       alt="Tweet media"
                       className="w-full h-full object-cover"
                     />
@@ -770,7 +821,7 @@ export default function ComposerPage() {
                   </div>
                   <div>
                     <p className="text-xs font-bold text-[#050505]">
-                      {currentWorkspace?.name || 'CommercePilot Brand'}
+                      {currentWorkspace?.name || 'NexusFlow Brand'}
                     </p>
                     <p className="text-[10px] text-[#65676B]">Just now • 🌍</p>
                   </div>
@@ -780,10 +831,10 @@ export default function ComposerPage() {
                   {content || 'Facebook page promotional post with clear call-to-action.'}
                 </p>
 
-                {mediaUrls[0] && (
+                {previewImage && (
                   <div className="w-full aspect-video rounded-lg overflow-hidden">
                     <img
-                      src={api.resolveMediaUrl(mediaUrls[0])}
+                      src={api.resolveMediaUrl(previewImage)}
                       alt="Facebook media"
                       className="w-full h-full object-cover"
                     />
@@ -842,9 +893,26 @@ export default function ComposerPage() {
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold text-[#17202A] truncate">{selectedProduct.title}</p>
                   <p className="text-[10px] text-[#667085]">
-                    SKU: {selectedProduct.sku || 'N/A'} • $
-                    {(selectedProduct.priceCents / 100).toFixed(2)}
+                    SKU: {selectedProduct.sku || 'N/A'} •{' '}
+                    {formatCurrency(
+                      selectedProduct.priceCents,
+                      selectedProduct.currency,
+                      currentWorkspace?.locale,
+                    )}
                   </p>
+                </div>
+              </div>
+            )}
+
+            {/* Linked Campaign Summary Badge */}
+            {selectedCampaignId && (
+              <div className="mt-2 p-2.5 bg-[#FFF9F5] border border-[#FECDCA] rounded-xl flex items-center space-x-2 text-xs max-w-sm mx-auto">
+                <Flag className="w-3.5 h-3.5 text-[#E85D2A] shrink-0" />
+                <div className="min-w-0 flex-1 text-[11px]">
+                  <span className="font-semibold text-[#17202A]">Campaign: </span>
+                  <span className="text-[#667085]">
+                    {campaigns.find((c) => c.id === selectedCampaignId)?.name || 'Linked'}
+                  </span>
                 </div>
               </div>
             )}

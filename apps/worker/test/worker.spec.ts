@@ -11,6 +11,7 @@ describe('Worker QueueManager', () => {
     expect(status.queues).toContain(QUEUE_NAMES.CATALOG_IMPORT);
     expect(status.queues).toContain(QUEUE_NAMES.POST_PUBLISHING);
     expect(status.queues).toContain(QUEUE_NAMES.ANALYTICS_SYNC);
+    expect(status.queues).toContain(QUEUE_NAMES.TOKEN_REFRESH);
   });
 
   it('should start in standby mode without throwing', async () => {

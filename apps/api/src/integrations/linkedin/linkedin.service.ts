@@ -41,6 +41,7 @@ export interface LinkedInStatusResult {
     status: SocialAccountStatus;
     tokenExpiresAt: Date | null;
     createdAt: Date;
+    hasRefreshToken: boolean;
   } | null;
   canPublish: boolean;
 }
@@ -203,7 +204,7 @@ export class LinkedInIntegrationService {
         accessToken = `mock_li_token_${Date.now()}`;
         profile = {
           sub: 'li_mock_member_782bb4',
-          name: 'CommercePilot LinkedIn Member',
+          name: 'NexusFlow LinkedIn Member',
           picture: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400',
         };
       } else {
@@ -393,6 +394,7 @@ export class LinkedInIntegrationService {
         status: account.status,
         tokenExpiresAt: account.tokenExpiresAt,
         createdAt: account.createdAt,
+        hasRefreshToken: !!account.encryptedRefreshToken,
       },
       canPublish,
     };
@@ -653,8 +655,11 @@ export class LinkedInIntegrationService {
     }
 
     if (!account.encryptedRefreshToken) {
+      const expiryText = account.tokenExpiresAt
+        ? ` Your current access token is active and valid until ${account.tokenExpiresAt.toLocaleDateString()}.`
+        : '';
       throw new BadRequestException(
-        'No refresh token available for this LinkedIn account. Please reconnect via OAuth to obtain a fresh token.',
+        `Standard LinkedIn apps issue 60-day access tokens without programmatic refresh tokens (refresh tokens require approved LinkedIn Marketing Platform partner access).${expiryText} To renew your session, please re-authenticate using the Reconnect button.`,
       );
     }
 

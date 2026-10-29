@@ -107,4 +107,18 @@ export class SocialController {
   ): Promise<{ success: boolean; id: string }> {
     return this.socialService.disconnectAccount(workspaceId, accountId, user.id, ip);
   }
+
+  @Post('refresh-expiring')
+  @Roles(WorkspaceRole.OWNER, WorkspaceRole.ADMIN)
+  @ApiOperation({ summary: 'Trigger automated background refresh for expiring social OAuth tokens' })
+  async refreshExpiringTokens(
+    @Param('workspaceId') workspaceId: string,
+    @Query('days') days?: string,
+  ) {
+    const daysThreshold = days ? parseInt(days, 10) : 7;
+    return this.socialService.refreshExpiringTokens(
+      workspaceId,
+      isNaN(daysThreshold) ? 7 : daysThreshold,
+    );
+  }
 }

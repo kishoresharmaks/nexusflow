@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useAuth } from '../../context/auth-context';
 import { api, type ProductItem, type BrandProfileItem, type QuotaStatus } from '../../lib/api';
 import { ProtectedRoute } from '../../components/protected-route';
+import { formatCurrency } from '../../lib/formatters';
 import {
   Sparkles,
   Package,
@@ -299,7 +300,7 @@ export default function AiStudioPage() {
                   >
                     {products.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.title} (${(p.priceCents / 100).toFixed(2)} {p.currency})
+                        {p.title} ({formatCurrency(p.priceCents, p.currency, currentWorkspace?.locale)})
                       </option>
                     ))}
                   </select>
@@ -309,7 +310,7 @@ export default function AiStudioPage() {
                     <div className="flex items-center justify-between text-xs">
                       <span className="font-semibold text-[#17202A]">{selectedProduct.title}</span>
                       <span className="font-mono text-[#E85D2A] font-bold">
-                        ${(selectedProduct.priceCents / 100).toFixed(2)} {selectedProduct.currency}
+                        {formatCurrency(selectedProduct.priceCents, selectedProduct.currency, currentWorkspace?.locale)}
                       </span>
                     </div>
                     <p className="text-[11px] text-[#667085] leading-relaxed">
@@ -640,7 +641,7 @@ export default function AiStudioPage() {
                         className="w-full h-full object-cover"
                       />
                       <div className="absolute bottom-2 left-2 bg-[#17202A]/80 backdrop-blur-sm text-white px-2 py-0.5 rounded text-[10px] font-mono">
-                        ${(selectedProduct.priceCents / 100).toFixed(2)} {selectedProduct.currency}
+                        {formatCurrency(selectedProduct.priceCents, selectedProduct.currency, currentWorkspace?.locale)}
                       </div>
                     </div>
                   )}

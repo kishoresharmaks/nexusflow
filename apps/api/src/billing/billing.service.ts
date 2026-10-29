@@ -1,10 +1,24 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+  ServiceUnavailableException,
+  Logger,
+} from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { EmailService } from '../email/email.service';
 import { BILLING_PLANS, PlanEntitlements } from './billing-plans';
 import { CreateCheckoutDto } from './dto/create-checkout.dto';
 import { CancelSubscriptionDto } from './dto/cancel-subscription.dto';
-import { Subscription, SubscriptionStatus, BillingEvent } from '@commercepilot/database';
+import { RazorpayClient } from './razorpay.client';
+import {
+  Subscription,
+  SubscriptionStatus,
+  BillingEvent,
+  BillingOrderStatus,
+} from '@commercepilot/database';
 
 export interface WorkspaceUsageSummary {
   plan: PlanEntitlements;
@@ -39,6 +53,7 @@ export interface WorkspaceUsageSummary {
 export interface CheckoutSessionResult {
   sessionId: string;
   orderId: string;
+  keyId: string;
   planId: string;
   planName: string;
   amountCents: number;
@@ -49,14 +64,49 @@ export interface CheckoutSessionResult {
 @Injectable()
 export class BillingService {
   private readonly logger = new Logger(BillingService.name);
+  private customPlans: PlanEntitlements[] = Object.values(BILLING_PLANS);
+  private planConfigurationAvailable = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly emailService?: EmailService,
+    private readonly razorpayClient?: RazorpayClient,
   ) {}
 
+  async onModuleInit(): Promise<void> {
+    try {
+      const setting = await this.prisma.platformSetting.findUnique({
+        where: { key: 'billing.plans' },
+      });
+      if (setting && Array.isArray(setting.value) && setting.value.length > 0) {
+        this.customPlans = setting.value as unknown as PlanEntitlements[];
+      }
+      this.planConfigurationAvailable = true;
+    } catch {
+      // Static plans are non-authoritative until the persisted configuration can be read.
+      this.planConfigurationAvailable = false;
+    }
+  }
+
   getAvailablePlans(): PlanEntitlements[] {
-    return Object.values(BILLING_PLANS);
+    return this.customPlans;
+  }
+
+  isPlanConfigurationAvailable(): boolean {
+    return this.planConfigurationAvailable;
+  }
+
+  setCustomPlans(plans: PlanEntitlements[]): void {
+    this.customPlans = plans;
+    this.planConfigurationAvailable = true;
+  }
+
+  getPlan(planId: string): PlanEntitlements | undefined {
+    return (
+      this.customPlans.find((p) => p.id.toUpperCase() === planId.toUpperCase()) ??
+      BILLING_PLANS[planId.toUpperCase()]
+    );
   }
 
   async getSubscription(workspaceId: string): Promise<Subscription> {
@@ -92,7 +142,7 @@ export class BillingService {
     userId: string,
     ip?: string,
   ): Promise<CheckoutSessionResult> {
-    const plan = BILLING_PLANS[dto.planId.toUpperCase()];
+    const plan = this.getPlan(dto.planId);
     if (!plan) {
       throw new BadRequestException(`Unknown billing plan: ${dto.planId}`);
     }
@@ -116,6 +166,11 @@ export class BillingService {
         },
       });
 
+      await this.prisma.workspace.update({
+        where: { id: workspaceId },
+        data: { planTier: 'FREE' },
+      });
+
       await this.auditService.record({
         workspaceId,
         userId,
@@ -129,6 +184,7 @@ export class BillingService {
       return {
         sessionId: `sess_free_${Date.now()}`,
         orderId: `order_free_${Date.now()}`,
+        keyId: '',
         planId: plan.id,
         planName: plan.name,
         amountCents: 0,
@@ -137,38 +193,99 @@ export class BillingService {
       };
     }
 
-    // Generate verified checkout session (e.g. Razorpay / Stripe compatible structure)
-    const sessionId = `cp_sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    const orderId = `order_${Math.random().toString(36).substring(2, 10)}`;
+    // Real Razorpay order creation — no simulated checkout URLs or fabricated order IDs.
+    if (!this.razorpayClient?.isConfigured()) {
+      throw new ServiceUnavailableException(
+        'Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET server-side.',
+      );
+    }
+
+    const receipt = `rcpt_${workspaceId}_${Date.now()}`;
+    const razorpayOrder = await this.razorpayClient.createOrder({
+      amount: plan.priceCents,
+      currency: plan.currency,
+      receipt,
+      notes: { workspaceId, planId: plan.id },
+    });
+
+    const billingOrder = await this.prisma.billingOrder.create({
+      data: {
+        workspaceId,
+        planId: plan.id,
+        razorpayOrderId: razorpayOrder.id,
+        amountCents: plan.priceCents,
+        currency: plan.currency,
+        status: BillingOrderStatus.PENDING,
+        receipt,
+      },
+    });
 
     await this.auditService.record({
       workspaceId,
       userId,
       action: 'BILLING_CHECKOUT_INITIATED',
-      resourceType: 'CheckoutSession',
-      resourceId: sessionId,
-      metadata: { planId: plan.id, amountCents: plan.priceCents },
+      resourceType: 'BillingOrder',
+      resourceId: billingOrder.id,
+      metadata: {
+        planId: plan.id,
+        amountCents: plan.priceCents,
+        razorpayOrderId: razorpayOrder.id,
+      },
       ...(ip ? { ipAddress: ip } : {}),
     });
 
     return {
-      sessionId,
-      orderId,
+      sessionId: billingOrder.id,
+      orderId: razorpayOrder.id,
+      keyId: this.razorpayClient.getKeyId(),
       planId: plan.id,
       planName: plan.name,
       amountCents: plan.priceCents,
       currency: plan.currency,
-      checkoutUrl: `/billing?session_id=${sessionId}&order_id=${orderId}`,
+      checkoutUrl: '', // client opens Razorpay Checkout using keyId + orderId
     };
   }
 
-  async activatePlan(
+  /**
+   * Webhook-gated activation. A plan is only activated after the Razorpay
+   * `payment.captured` webhook has been cryptographically verified and the
+   * corresponding BillingOrder has been marked PAID server-side.
+   */
+  async confirmActivation(
     workspaceId: string,
-    planId: string,
+    orderId: string,
     userId: string,
     ip?: string,
   ): Promise<Subscription> {
-    const plan = BILLING_PLANS[planId.toUpperCase()];
+    const order = await this.prisma.billingOrder.findFirst({
+      where: { workspaceId, razorpayOrderId: orderId },
+    });
+
+    if (!order) {
+      throw new NotFoundException(`Billing order ${orderId} was not found for this workspace.`);
+    }
+
+    if (order.status !== BillingOrderStatus.PAID) {
+      throw new ConflictException(
+        'Payment has not been confirmed. Activation requires a verified Razorpay payment.captured webhook.',
+      );
+    }
+
+    if (!order.providerPaymentId) {
+      throw new ConflictException('Billing order is missing its provider payment reference.');
+    }
+
+    return this.applyActivation(workspaceId, order.planId, order.providerPaymentId, userId, ip);
+  }
+
+  private async applyActivation(
+    workspaceId: string,
+    planId: string,
+    providerPaymentId: string,
+    userId: string,
+    ip?: string,
+  ): Promise<Subscription> {
+    const plan = this.getPlan(planId);
     if (!plan) {
       throw new BadRequestException(`Unknown billing plan: ${planId}`);
     }
@@ -189,14 +306,29 @@ export class BillingService {
       },
     });
 
+    // Synchronize workspace planTier and cancel superseded active subscriptions
+    await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { planTier: plan.id },
+    });
+
+    await this.prisma.subscription.updateMany({
+      where: {
+        workspaceId,
+        id: { not: currentSub.id },
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING, SubscriptionStatus.PAST_DUE] },
+      },
+      data: { status: SubscriptionStatus.CANCELED },
+    });
+
     await this.prisma.billingEvent.create({
       data: {
         workspaceId,
-        providerPaymentId: `pay_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        providerPaymentId,
         amountCents: plan.priceCents,
         currency: plan.currency,
         eventType: 'SUBSCRIPTION_ACTIVATED',
-        metadata: { activatedBy: userId, planId: plan.id },
+        metadata: { activatedBy: userId, planId: plan.id, providerPaymentId },
       },
     });
 
@@ -206,9 +338,31 @@ export class BillingService {
       action: 'BILLING_PLAN_ACTIVATED',
       resourceType: 'Subscription',
       resourceId: currentSub.id,
-      metadata: { fromPlan: currentSub.planId, toPlan: plan.id, amountCents: plan.priceCents },
+      metadata: { fromPlan: currentSub.planId, toPlan: plan.id, amountCents: plan.priceCents, providerPaymentId },
       ...(ip ? { ipAddress: ip } : {}),
     });
+
+    if (this.emailService) {
+      try {
+        const [ws, user] = await Promise.all([
+          this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true } }),
+          this.prisma.user.findUnique({ where: { id: userId }, select: { email: true, name: true } }),
+        ]);
+
+        if (user?.email) {
+          await this.emailService.sendSubscriptionUpdatedEmail(
+            user.email,
+            user.name || 'Workspace Administrator',
+            ws?.name || 'Workspace',
+            plan.name,
+            plan.priceCents,
+            plan.currency,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to dispatch subscription updated email: ${err instanceof Error ? err.message : 'Unknown'}`);
+      }
+    }
 
     return updated;
   }
@@ -241,12 +395,33 @@ export class BillingService {
       ...(ip ? { ipAddress: ip } : {}),
     });
 
+    if (this.emailService) {
+      try {
+        const [ws, user] = await Promise.all([
+          this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true } }),
+          this.prisma.user.findUnique({ where: { id: userId }, select: { email: true, name: true } }),
+        ]);
+
+        if (user?.email) {
+          await this.emailService.sendSubscriptionCancelledEmail(
+            user.email,
+            user.name || 'Workspace Administrator',
+            ws?.name || 'Workspace',
+            this.getPlan(sub.planId)?.name || sub.planId,
+            sub.currentPeriodEnd,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to dispatch subscription cancelled email: ${err instanceof Error ? err.message : 'Unknown'}`);
+      }
+    }
+
     return updated;
   }
 
   async getUsage(workspaceId: string): Promise<WorkspaceUsageSummary> {
     const sub = await this.getSubscription(workspaceId);
-    const plan = BILLING_PLANS[sub.planId] ?? BILLING_PLANS.FREE!;
+    const plan = this.getPlan(sub.planId) ?? BILLING_PLANS.FREE!;
 
     const periodStart = sub.currentPeriodStart;
 

@@ -86,4 +86,24 @@ describe('WorkspaceGuard (Cross-Tenant Isolation Gate)', () => {
 
     await expect(guard.canActivate(context)).rejects.toThrow(NotFoundException);
   });
+
+  it('rejects access when the workspace has been suspended by a platform administrator', async () => {
+    const validObjectId = '507f1f77bcf86cd799439044';
+    const { context } = createMockContext({ id: 'user_1' }, { workspaceId: validObjectId });
+
+    mockPrisma.membership.findUnique.mockResolvedValue({
+      id: 'mem_1',
+      userId: 'user_1',
+      workspaceId: validObjectId,
+      role: WorkspaceRole.MEMBER,
+      workspace: {
+        id: validObjectId,
+        name: 'Suspended Workspace',
+        status: 'SUSPENDED',
+        suspensionReason: 'Payment default',
+      },
+    });
+
+    await expect(guard.canActivate(context)).rejects.toThrow(ForbiddenException);
+  });
 });

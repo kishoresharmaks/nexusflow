@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EntitlementsService } from '../src/billing/entitlements.service';
 import { SubscriptionStatus } from '@commercepilot/database';
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
+import { BILLING_PLANS } from '../src/billing/billing-plans';
 import type { PrismaService } from '../src/database/prisma.service';
 
 describe('EntitlementsService', () => {
   let service: EntitlementsService;
   let mockPrisma: any;
+  let mockBilling: any;
 
   const workspaceId = '507f1f77bcf86cd799439011';
 
@@ -26,10 +28,20 @@ describe('EntitlementsService', () => {
       },
     };
 
-    service = new EntitlementsService(mockPrisma as unknown as PrismaService);
+    mockBilling = {
+      isPlanConfigurationAvailable: vi.fn().mockReturnValue(true),
+      getPlan: vi.fn((planId: string) => BILLING_PLANS[planId]),
+    };
+    service = new EntitlementsService(mockPrisma as unknown as PrismaService, mockBilling);
   });
 
   describe('Post Creation Entitlements', () => {
+    it('fails closed when plan configuration cannot be authoritatively loaded', async () => {
+      mockBilling.isPlanConfigurationAvailable.mockReturnValue(false);
+
+      await expect(service.enforceCanCreatePost(workspaceId)).rejects.toThrow(ServiceUnavailableException);
+      expect(mockPrisma.post.count).not.toHaveBeenCalled();
+    });
     it('allows post creation when under FREE tier quota of 10 posts', async () => {
       mockPrisma.subscription.findFirst.mockResolvedValue({
         id: 'sub-1',

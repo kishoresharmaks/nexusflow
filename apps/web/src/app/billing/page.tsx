@@ -10,6 +10,7 @@ import {
   type BillingEventItem,
 } from '../../lib/api';
 import { ProtectedRoute } from '../../components/protected-route';
+import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import {
   CreditCard,
   CheckCircle2,
@@ -27,11 +28,29 @@ import {
   FileText,
 } from 'lucide-react';
 
+interface RazorpayCheckoutInstance {
+  open: () => void;
+}
+
+interface RazorpayCheckoutOptions {
+  key: string;
+  amount: number;
+  currency: string;
+  order_id: string;
+  name: string;
+  description: string;
+  handler: (response: { razorpay_order_id?: string }) => void;
+  modal?: { ondismiss: () => void };
+  theme?: { color?: string };
+}
+
+type RazorpayConstructor = new (options: RazorpayCheckoutOptions) => RazorpayCheckoutInstance;
+
 const FALLBACK_PLANS: BillingPlanItem[] = [
   {
     id: 'FREE',
     name: 'Free Trial',
-    description: 'Perfect for evaluating CommercePilot with your initial catalog.',
+    description: 'Perfect for evaluating NexusFlow with your initial catalog.',
     priceCents: 0,
     currency: 'USD',
     billingInterval: 'month',
@@ -124,9 +143,11 @@ export default function BillingPage() {
   // Checkout modal
   const [selectedPlan, setSelectedPlan] = useState<BillingPlanItem | null>(null);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
-  const [_checkoutResult, setCheckoutResult] = useState<{
-    sessionId: string;
+  const [checkoutResult, setCheckoutResult] = useState<{
     orderId: string;
+    keyId: string;
+    amountCents: number;
+    currency: string;
   } | null>(null);
 
   // Cancel dialog
@@ -190,10 +211,12 @@ export default function BillingPage() {
     try {
       const res = await api.createBillingCheckout(workspaceId, plan.id);
       setCheckoutResult({
-        sessionId: res.sessionId,
         orderId: res.orderId,
+        keyId: res.keyId,
+        amountCents: res.amountCents,
+        currency: res.currency,
       });
-      setFeedbackMsg({ text: `Checkout initiated for ${plan.name}.` });
+      setFeedbackMsg({ text: `Checkout initiated for ${plan.name}. Complete payment to activate.` });
     } catch (err: unknown) {
       setFeedbackMsg({
         text: err instanceof Error ? err.message : 'Failed to create checkout session.',
@@ -205,25 +228,82 @@ export default function BillingPage() {
     }
   };
 
-  const handleConfirmActivatePlan = async () => {
-    if (!workspaceId || !selectedPlan) return;
+  const loadRazorpayScript = useCallback((): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if ((window as { Razorpay?: RazorpayConstructor }).Razorpay) {
+        resolve();
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load the Razorpay checkout script.'));
+      document.head.appendChild(script);
+    });
+  }, []);
+
+  const confirmActivation = useCallback(
+    async (orderId: string, planName: string) => {
+      if (!workspaceId) return;
+      // The payment.captured webhook may still be in flight; poll until confirmed.
+      for (let attempt = 0; attempt < 15; attempt++) {
+        try {
+          const updated = await api.activateBillingPlan(workspaceId, orderId);
+          setSubscription(updated);
+          setFeedbackMsg({ text: `Successfully subscribed to ${planName}!` });
+          setSelectedPlan(null);
+          setCheckoutResult(null);
+          await loadBillingData();
+          return;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : '';
+          if (message.includes('not been confirmed')) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            continue;
+          }
+          setFeedbackMsg({ text: message || 'Failed to activate plan subscription.', isError: true });
+          return;
+        }
+      }
+      setFeedbackMsg({
+        text: 'Payment is still being confirmed by the provider and will activate automatically once the webhook arrives.',
+      });
+    },
+    [workspaceId, loadBillingData],
+  );
+
+  const openRazorpayCheckout = useCallback(async () => {
+    if (!checkoutResult || !selectedPlan) return;
     setIsCheckingOut(true);
     try {
-      const updated = await api.activateBillingPlan(workspaceId, selectedPlan.id);
-      setSubscription(updated);
-      setFeedbackMsg({ text: `Successfully subscribed to ${selectedPlan.name}!` });
-      setSelectedPlan(null);
-      setCheckoutResult(null);
-      await loadBillingData();
+      await loadRazorpayScript();
+      const Razorpay = (window as { Razorpay?: RazorpayConstructor }).Razorpay;
+      if (!Razorpay) {
+        throw new Error('Razorpay checkout is not available.');
+      }
+      const instance = new Razorpay({
+        key: checkoutResult.keyId,
+        amount: checkoutResult.amountCents,
+        currency: checkoutResult.currency,
+        order_id: checkoutResult.orderId,
+        name: 'NexusFlow CommercePilot',
+        description: `${selectedPlan.name} subscription`,
+        handler: (response: { razorpay_order_id?: string }) => {
+          void confirmActivation(response.razorpay_order_id || checkoutResult.orderId, selectedPlan.name);
+        },
+        modal: { ondismiss: () => setIsCheckingOut(false) },
+        theme: { color: '#E85D2A' },
+      });
+      instance.open();
     } catch (err: unknown) {
       setFeedbackMsg({
-        text: err instanceof Error ? err.message : 'Failed to activate plan subscription.',
+        text: err instanceof Error ? err.message : 'Failed to open Razorpay checkout.',
         isError: true,
       });
-    } finally {
       setIsCheckingOut(false);
     }
-  };
+  }, [checkoutResult, selectedPlan, loadRazorpayScript, confirmActivation]);
 
   const handleConfirmCancel = async () => {
     if (!workspaceId) return;
@@ -345,14 +425,26 @@ export default function BillingPage() {
                 </span>
                 <span className="font-medium text-foreground">
                   {subscription?.currentPeriodEnd
-                    ? new Date(subscription.currentPeriodEnd).toLocaleDateString()
+                    ? formatDateTime(
+                        subscription.currentPeriodEnd,
+                        currentWorkspace?.timezone,
+                        currentWorkspace?.locale,
+                        'date',
+                      )
                     : 'Ongoing'}
                 </span>
               </div>
               {subscription?.cancelAtPeriodEnd && (
                 <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-2.5 text-xs text-amber-700 dark:text-amber-400">
                   <AlertTriangle className="w-3.5 h-3.5 inline mr-1" />
-                  Cancels on {new Date(subscription.currentPeriodEnd).toLocaleDateString()}.
+                  Cancels on{' '}
+                  {formatDateTime(
+                    subscription.currentPeriodEnd,
+                    currentWorkspace?.timezone,
+                    currentWorkspace?.locale,
+                    'date',
+                  )}
+                  .
                 </div>
               )}
             </div>
@@ -580,14 +672,19 @@ export default function BillingPage() {
                     {history.map((event) => (
                       <tr key={event.id} className="hover:bg-muted/30 transition-colors">
                         <td className="px-6 py-3.5 font-medium text-foreground">
-                          {new Date(event.createdAt).toLocaleDateString()}
+                          {formatDateTime(
+                            event.createdAt,
+                            currentWorkspace?.timezone,
+                            currentWorkspace?.locale,
+                            'date',
+                          )}
                         </td>
                         <td className="px-6 py-3.5 font-mono text-muted-foreground">
                           {event.providerPaymentId}
                         </td>
                         <td className="px-6 py-3.5 font-medium">{event.eventType}</td>
                         <td className="px-6 py-3.5 font-semibold text-foreground">
-                          ${(event.amountCents / 100).toFixed(2)} {event.currency}
+                          {formatCurrency(event.amountCents, event.currency, currentWorkspace?.locale)}
                         </td>
                         <td className="px-6 py-3.5">
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
@@ -642,7 +739,7 @@ export default function BillingPage() {
 
               <div className="space-y-3">
                 <button
-                  onClick={() => void handleConfirmActivatePlan()}
+                  onClick={() => void openRazorpayCheckout()}
                   disabled={isCheckingOut}
                   className="w-full py-3 rounded-xl text-sm font-semibold bg-primary text-primary-foreground shadow hover:bg-primary/90 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 >
@@ -651,7 +748,7 @@ export default function BillingPage() {
                   ) : (
                     <>
                       <CreditCard className="w-4 h-4" />
-                      Confirm & Activate Subscription
+                      Pay & Activate Subscription
                     </>
                   )}
                 </button>

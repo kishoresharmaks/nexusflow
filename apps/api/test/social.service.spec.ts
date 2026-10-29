@@ -172,7 +172,7 @@ describe('SocialService', () => {
 
   it('getMetaOAuthUrl returns signed OAuth URL bound to workspace and user', () => {
     const res = service.getMetaOAuthUrl(validWorkspaceId, validUserId);
-    expect(res.authUrl).toContain('facebook.com/v19.0/dialog/oauth');
+    expect(res.authUrl).toMatch(/facebook\.com\/v\d+\.\d+\/dialog\/oauth/);
     expect(res.authUrl).toContain('instagram_content_publish');
     expect(res.state).toBeDefined();
     expect(res.expiresInSeconds).toBe(600);

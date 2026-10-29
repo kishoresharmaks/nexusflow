@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BillingService } from '../src/billing/billing.service';
-import { SubscriptionStatus } from '@commercepilot/database';
+import { SubscriptionStatus, BillingOrderStatus } from '@commercepilot/database';
 import type { PrismaService } from '../src/database/prisma.service';
 import type { AuditService } from '../src/audit/audit.service';
+import type { RazorpayClient } from '../src/billing/razorpay.client';
 
 describe('BillingService', () => {
   let service: BillingService;
@@ -10,6 +11,8 @@ describe('BillingService', () => {
   let mockPrisma: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mockAudit: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let mockRazorpay: any;
 
   const validWorkspaceId = '507f1f77bcf86cd799439011';
   const validUserId = '507f1f77bcf86cd799439099';
@@ -20,10 +23,18 @@ describe('BillingService', () => {
         findFirst: vi.fn(),
         create: vi.fn(),
         update: vi.fn(),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      workspace: {
+        update: vi.fn().mockResolvedValue({ id: validWorkspaceId, planTier: 'FREE' }),
       },
       billingEvent: {
         findMany: vi.fn(),
         create: vi.fn(),
+      },
+      billingOrder: {
+        create: vi.fn(),
+        findFirst: vi.fn(),
       },
       post: {
         count: vi.fn(),
@@ -43,9 +54,25 @@ describe('BillingService', () => {
       record: vi.fn().mockResolvedValue({ id: 'audit-1' }),
     };
 
+    mockRazorpay = {
+      isConfigured: vi.fn().mockReturnValue(true),
+      getKeyId: vi.fn().mockReturnValue('rzp_test_key_123'),
+      createOrder: vi.fn().mockResolvedValue({
+        id: 'order_real_123',
+        entity: 'order',
+        amount: 2900,
+        amount_paid: 0,
+        currency: 'USD',
+        receipt: 'rcpt_test',
+        status: 'created',
+      }),
+    };
+
     service = new BillingService(
       mockPrisma as unknown as PrismaService,
       mockAudit as unknown as AuditService,
+      undefined,
+      mockRazorpay as unknown as RazorpayClient,
     );
   });
 
@@ -98,12 +125,16 @@ describe('BillingService', () => {
       ).rejects.toThrow('Unknown billing plan: NONEXISTENT');
     });
 
-    it('creates paid checkout session with order id and emits audit log', async () => {
+    it('creates paid checkout session with a real Razorpay order id and emits audit log', async () => {
       mockPrisma.subscription.findFirst.mockResolvedValue({
         id: 'sub-1',
         workspaceId: validWorkspaceId,
         planId: 'FREE',
         status: SubscriptionStatus.ACTIVE,
+      });
+      mockPrisma.billingOrder.create.mockResolvedValue({
+        id: 'billing-order-1',
+        razorpayOrderId: 'order_real_123',
       });
 
       const session = await service.createCheckoutSession(
@@ -115,8 +146,16 @@ describe('BillingService', () => {
 
       expect(session.planId).toBe('STARTER');
       expect(session.amountCents).toBe(2900);
-      expect(session.sessionId).toContain('cp_sess_');
-      expect(session.orderId).toContain('order_');
+      expect(session.sessionId).toBe('billing-order-1');
+      expect(session.orderId).toBe('order_real_123');
+      expect(session.keyId).toBe('rzp_test_key_123');
+      expect(mockRazorpay.createOrder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amount: 2900,
+          currency: 'USD',
+          notes: expect.objectContaining({ workspaceId: validWorkspaceId, planId: 'STARTER' }),
+        }),
+      );
       expect(mockAudit.record).toHaveBeenCalledWith(
         expect.objectContaining({
           workspaceId: validWorkspaceId,
@@ -124,6 +163,21 @@ describe('BillingService', () => {
           action: 'BILLING_CHECKOUT_INITIATED',
         }),
       );
+    });
+
+    it('fails with ServiceUnavailableException when Razorpay is not configured', async () => {
+      mockPrisma.subscription.findFirst.mockResolvedValue({
+        id: 'sub-1',
+        workspaceId: validWorkspaceId,
+        planId: 'FREE',
+        status: SubscriptionStatus.ACTIVE,
+      });
+      mockRazorpay.isConfigured.mockReturnValue(false);
+
+      await expect(
+        service.createCheckoutSession(validWorkspaceId, { planId: 'STARTER' }, validUserId),
+      ).rejects.toThrow('Razorpay is not configured');
+      expect(mockRazorpay.createOrder).not.toHaveBeenCalled();
     });
 
     it('switches to FREE plan directly without payment gateway', async () => {
@@ -152,6 +206,68 @@ describe('BillingService', () => {
           data: expect.objectContaining({ planId: 'FREE' }),
         }),
       );
+    });
+  });
+
+  describe('confirmActivation', () => {
+    it('rejects activation when the billing order is not PAID', async () => {
+      mockPrisma.billingOrder.findFirst.mockResolvedValue({
+        id: 'bo-1',
+        workspaceId: validWorkspaceId,
+        planId: 'GROWTH',
+        razorpayOrderId: 'order_real_123',
+        status: BillingOrderStatus.PENDING,
+        providerPaymentId: null,
+      });
+
+      await expect(
+        service.confirmActivation(validWorkspaceId, 'order_real_123', validUserId),
+      ).rejects.toThrow('Payment has not been confirmed');
+      expect(mockPrisma.subscription.update).not.toHaveBeenCalled();
+    });
+
+    it('activates the plan when the billing order is PAID (webhook confirmed)', async () => {
+      mockPrisma.billingOrder.findFirst.mockResolvedValue({
+        id: 'bo-1',
+        workspaceId: validWorkspaceId,
+        planId: 'GROWTH',
+        razorpayOrderId: 'order_real_123',
+        status: BillingOrderStatus.PAID,
+        providerPaymentId: 'pay_real_123',
+      });
+      mockPrisma.subscription.findFirst.mockResolvedValue({
+        id: 'sub-1',
+        workspaceId: validWorkspaceId,
+        planId: 'FREE',
+        status: SubscriptionStatus.ACTIVE,
+        currentPeriodStart: new Date(),
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400000),
+        cancelAtPeriodEnd: false,
+      });
+      mockPrisma.subscription.update.mockImplementation((args: { data: unknown }) =>
+        Promise.resolve({ id: 'sub-1', ...args.data }),
+      );
+
+      const result = await service.confirmActivation(
+        validWorkspaceId,
+        'order_real_123',
+        validUserId,
+      );
+
+      expect(result.planId).toBe('GROWTH');
+      expect(result.status).toBe(SubscriptionStatus.ACTIVE);
+      expect(mockPrisma.billingEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            providerPaymentId: 'pay_real_123',
+            eventType: 'SUBSCRIPTION_ACTIVATED',
+          }),
+        }),
+      );
+      expect(mockPrisma.workspace.update).toHaveBeenCalledWith({
+        where: { id: validWorkspaceId },
+        data: { planTier: 'GROWTH' },
+      });
     });
   });
 

@@ -16,7 +16,7 @@ export const BILLING_PLANS: Record<string, PlanEntitlements> = {
   FREE: {
     id: 'FREE',
     name: 'Free Trial',
-    description: 'Perfect for evaluating CommercePilot with your initial catalog.',
+    description: 'Perfect for evaluating NexusFlow with your initial catalog.',
     priceCents: 0,
     currency: 'USD',
     billingInterval: 'month',

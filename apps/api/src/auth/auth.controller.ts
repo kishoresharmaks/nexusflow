@@ -18,6 +18,9 @@ import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { ActivateAccountDto } from './dto/activate-account.dto';
+import { ResendVerificationDto } from './dto/resend-verification.dto';
+import { ResendActivationDto } from './dto/resend-activation.dto';
 import { DeleteAccountDto } from './dto/delete-account.dto';
 import { AuthGuard, AuthenticatedRequest, AuthenticatedUser } from './guards/auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -28,6 +31,13 @@ import { RateLimitGuard } from '../common/rate-limit/rate-limit.guard';
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Get('config')
+  @ApiOperation({ summary: 'Get public platform authentication and registration configuration' })
+  @ApiResponse({ status: 200, description: 'Public platform configuration' })
+  async getAuthConfig() {
+    return this.authService.getPublicAuthConfig();
+  }
 
   @Post('register')
   @UseGuards(RateLimitGuard)
@@ -187,6 +197,54 @@ export class AuthController {
     return this.authService.verifyEmail(dto);
   }
 
+  @Post('activate-account')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Activate an account with activation token and establish password' })
+  @ApiResponse({ status: 200, description: 'Account activated successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid or expired activation token' })
+  async activateAccount(@Body() dto: ActivateAccountDto, @Req() req: Request) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip;
+    return this.authService.activateAccount(dto, ip);
+  }
+
+  @Post('resend-verification')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RateLimitGuard)
+  @RateLimit({ limit: 5, windowSeconds: 300, keyPrefix: 'auth_resend_verify' })
+  @ApiOperation({ summary: 'Resend email verification link' })
+  @ApiResponse({ status: 200, description: 'Verification email sent if account exists' })
+  async resendVerification(
+    @Body() dto: ResendVerificationDto,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip;
+    // Check if authenticated
+    const authHeader = req.headers['authorization'];
+    let target = dto.email;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7).trim();
+      const session = await this.authService.validateSession(token);
+      if (session) {
+        target = session.user.id;
+      }
+    }
+    if (!target) {
+      return { message: 'If an account exists with this email, a verification link has been sent.' };
+    }
+    return this.authService.resendVerification(target, ip);
+  }
+
+  @Post('resend-activation')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RateLimitGuard)
+  @RateLimit({ limit: 5, windowSeconds: 300, keyPrefix: 'auth_resend_activate' })
+  @ApiOperation({ summary: 'Resend account activation email' })
+  @ApiResponse({ status: 200, description: 'Activation email sent if account is pending activation' })
+  async resendActivation(@Body() dto: ResendActivationDto, @Req() req: Request) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip;
+    return this.authService.resendActivation(dto.email, ip);
+  }
+
   @Get('me')
   @UseGuards(AuthGuard)
   @ApiBearerAuth()
@@ -199,13 +257,18 @@ export class AuthController {
         email: user.email,
         name: user.name,
         isEmailVerified: user.isEmailVerified,
+        emailVerifiedAt: user.emailVerifiedAt,
+        accountStatus: user.accountStatus,
       },
-      workspaces: user.memberships.map((m) => ({
-        id: m.workspace.id,
-        name: m.workspace.name,
-        slug: m.workspace.slug,
-        role: m.role,
-      })),
+      workspaces: user.memberships
+        .filter((m) => m.status !== 'REMOVED')
+        .map((m) => ({
+          id: m.workspace.id,
+          name: m.workspace.name,
+          slug: m.workspace.slug,
+          role: m.role,
+          status: m.status,
+        })),
     };
   }
 }

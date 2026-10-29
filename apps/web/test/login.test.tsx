@@ -27,6 +27,6 @@ describe('LoginPage', () => {
     expect(screen.getByPlaceholderText('••••••••••••')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Sign In' })).toBeDefined();
     expect(screen.getByText(/1-Click Quick Demo Sign In/i)).toBeDefined();
-    expect(screen.getByText(/Argon2id password hashing/i)).toBeDefined();
+    expect(screen.getByText(/Enterprise-grade security/i)).toBeDefined();
   });
 });

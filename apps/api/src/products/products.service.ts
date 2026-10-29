@@ -4,9 +4,11 @@ import {
   BadRequestException,
   ConflictException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { StoreConnectionsService } from '../integrations/stores/store-connections.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { QueryProductsDto } from './dto/query-products.dto';
@@ -36,6 +38,7 @@ export class ProductsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    @Optional() private readonly storeConnectionsService?: StoreConnectionsService,
   ) {}
 
   /**
@@ -327,10 +330,18 @@ export class ProductsService {
       throw new NotFoundException('Product not found in this workspace.');
     }
 
-    const updated = await this.prisma.product.update({
-      where: { id: productId },
-      data: { freshnessCheckedAt: new Date() },
-    });
+    // Try refreshing live data directly from the external source store (Shopify, WooCommerce, etc.)
+    let updated: Product | null = null;
+    if (this.storeConnectionsService && existing.source && existing.sourceId) {
+      updated = await this.storeConnectionsService.refreshProductFromStore(workspaceId, productId);
+    }
+
+    if (!updated) {
+      updated = await this.prisma.product.update({
+        where: { id: productId },
+        data: { freshnessCheckedAt: new Date() },
+      });
+    }
 
     await this.auditService.record({
       workspaceId,
@@ -339,6 +350,12 @@ export class ProductsService {
       resourceType: 'Product',
       resourceId: productId,
       ipAddress: clientIp,
+      metadata: {
+        source: updated.source,
+        sourceId: updated.sourceId,
+        sku: updated.sku,
+        refreshedFromStore: Boolean(updated.source && updated.sourceId),
+      },
     });
 
     return {

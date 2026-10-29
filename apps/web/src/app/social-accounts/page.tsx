@@ -53,6 +53,7 @@ const SUPPORTED_PROVIDERS: ProviderConfig[] = [
     defaultScopes: [
       'instagram_basic',
       'instagram_content_publish',
+      'instagram_manage_insights',
       'pages_show_list',
       'pages_read_engagement',
     ],
@@ -120,6 +121,7 @@ interface LinkedInStatus {
     status: string;
     tokenExpiresAt: string | null;
     createdAt: string;
+    hasRefreshToken?: boolean;
   } | null;
   canPublish: boolean;
 }
@@ -135,6 +137,7 @@ interface InstagramStatus {
     status: string;
     tokenExpiresAt: string | null;
     createdAt: string;
+    hasRefreshToken?: boolean;
   } | null;
   canPublish: boolean;
 }
@@ -190,6 +193,7 @@ function SocialAccountsContent() {
   const [accountId, setAccountId] = useState<string>('');
   const [accessToken, setAccessToken] = useState<string>('');
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
+  const [isRefreshingTokens, setIsRefreshingTokens] = useState<boolean>(false);
 
   // Track whether we've already processed the callback query params on mount
   const callbackProcessed = useRef<boolean>(false);
@@ -201,6 +205,28 @@ function SocialAccountsContent() {
       isMounted.current = false;
     };
   }, []);
+
+  const handleRefreshExpiringTokens = async () => {
+    if (!currentWorkspace) return;
+    setIsRefreshingTokens(true);
+    try {
+      const res = await api.refreshExpiringSocialTokens(currentWorkspace.id, 7);
+      setStatusMessage({
+        type: 'success',
+        text: `Automated token refresh cron check completed: ${res.refreshed} refreshed, ${res.expired} expired out of ${res.scanned} active accounts checked.`,
+      });
+      await loadAccounts();
+    } catch (err) {
+      setStatusMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Automated token refresh check failed.',
+      });
+    } finally {
+      if (isMounted.current) {
+        setIsRefreshingTokens(false);
+      }
+    }
+  };
 
   // ---------------------------------------------------------------------------
   // Load non-LinkedIn accounts
@@ -279,8 +305,8 @@ function SocialAccountsContent() {
       setStatusMessage({
         type: 'success',
         text: memberName
-          ? `LinkedIn connected successfully! Signed in as ${decodeURIComponent(memberName)}. Token encrypted with AES-256-GCM.`
-          : 'LinkedIn connected successfully! Token encrypted with AES-256-GCM.',
+          ? `LinkedIn connected successfully! Signed in as ${decodeURIComponent(memberName)}.`
+          : 'LinkedIn connected successfully! Your account is ready for publishing.',
       });
     } else if (linkedinParam === 'denied') {
       setStatusMessage({
@@ -298,8 +324,8 @@ function SocialAccountsContent() {
       setStatusMessage({
         type: 'success',
         text: memberName
-          ? `Instagram connected successfully! Linked to ${decodeURIComponent(memberName)}. Token encrypted with AES-256-GCM.`
-          : 'Instagram connected successfully! Token encrypted with AES-256-GCM.',
+          ? `Instagram connected successfully! Linked to ${decodeURIComponent(memberName)}.`
+          : 'Instagram connected successfully! Your account is ready for publishing.',
       });
     } else if (instagramParam === 'denied') {
       setStatusMessage({
@@ -374,6 +400,14 @@ function SocialAccountsContent() {
   // ---------------------------------------------------------------------------
   const handleLinkedInRefresh = async () => {
     if (!currentWorkspace?.id || !linkedInStatus?.account?.id) return;
+
+    if (!linkedInStatus.account.hasRefreshToken) {
+      setStatusMessage({
+        type: 'info',
+        text: 'Standard LinkedIn accounts use 60-day access tokens. Use "Reconnect" to renew your session when needed.',
+      });
+      return;
+    }
 
     setIsRefreshingLinkedIn(true);
     setStatusMessage(null);
@@ -559,7 +593,7 @@ function SocialAccountsContent() {
 
       setStatusMessage({
         type: 'success',
-        text: `Successfully connected ${provConfig?.name}! Tokens encrypted with AES-256-GCM.`,
+        text: `Successfully connected ${provConfig?.name}! Your account is ready for publishing.`,
       });
       setConnectingProvider(null);
       await loadAccounts();
@@ -622,19 +656,33 @@ function SocialAccountsContent() {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            void loadAccounts();
-            void loadLinkedInStatus();
-            void loadInstagramStatus();
-          }}
-          disabled={isLoading}
-          className="p-2 border border-[#D0D5DD] rounded-lg text-[#667085] hover:text-[#17202A] hover:bg-[#F2F4F7] transition-all self-start sm:self-auto mt-4 sm:mt-0"
-          title="Refresh Accounts"
-        >
-          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto mt-4 sm:mt-0">
+          <button
+            type="button"
+            onClick={() => void handleRefreshExpiringTokens()}
+            disabled={isRefreshingTokens || isLoading}
+            className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition-all shadow-2xs disabled:opacity-50"
+            title="Scan and automatically refresh social OAuth tokens expiring within 7 days"
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 text-indigo-600 ${isRefreshingTokens ? 'animate-spin' : ''}`}
+            />
+            <span>{isRefreshingTokens ? 'Refreshing Tokens…' : 'Run Token Refresh Cron'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void loadAccounts();
+              void loadLinkedInStatus();
+              void loadInstagramStatus();
+            }}
+            disabled={isLoading}
+            className="p-2 border border-[#D0D5DD] rounded-lg text-[#667085] hover:text-[#17202A] hover:bg-[#F2F4F7] transition-all"
+            title="Refresh Accounts"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
       {/* Status Banner */}
@@ -666,10 +714,9 @@ function SocialAccountsContent() {
       <div className="mb-8 p-4 bg-[#F8F9FC] border border-[#D5D9EB] rounded-xl flex items-start space-x-3 text-xs text-[#344054]">
         <Lock className="w-4 h-4 text-[#0A66C2] flex-shrink-0 mt-0.5" />
         <div>
-          <p className="font-bold text-[#17202A]">Bank-Grade Token Encryption at Rest</p>
+          <p className="font-bold text-[#17202A]">End-to-End Account Protection</p>
           <p className="mt-0.5 text-[#667085]">
-            All OAuth tokens and API secrets are protected with authenticated AES-256-GCM
-            encryption. Decrypted tokens are never exposed in browser payloads or application logs.
+            Connected accounts are protected with industry-standard security. Your credentials and access permissions remain private and are never shared.
           </p>
         </div>
       </div>
@@ -696,6 +743,12 @@ function SocialAccountsContent() {
             const canPublish = li?.canPublish ?? false;
             const isExpired =
               li?.account?.tokenExpiresAt && new Date(li.account.tokenExpiresAt) < new Date();
+            const expiresAt = li?.account?.tokenExpiresAt ? new Date(li.account.tokenExpiresAt) : null;
+            const daysRemaining = expiresAt
+              ? Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+              : null;
+            const isExpiringSoon = daysRemaining !== null && daysRemaining <= 7 && !isExpired;
+            const hasRefreshToken = !!li?.account?.hasRefreshToken;
 
             return (
               <div
@@ -758,11 +811,19 @@ function SocialAccountsContent() {
                           </span>
                         )}
                       </p>
-                      {isExpired && (
-                        <p className="text-[10px] text-[#B45309] flex items-center gap-1 pl-8">
-                          <Clock className="w-2.5 h-2.5" /> Token expired — reconnect to resume publishing.
+                      {isExpired ? (
+                        <p className="text-[10px] text-[#B42318] flex items-center gap-1 pl-8 font-medium">
+                          <Clock className="w-2.5 h-2.5" /> Token expired — reconnect via LinkedIn to resume publishing.
                         </p>
-                      )}
+                      ) : isExpiringSoon ? (
+                        <p className="text-[10px] text-[#B45309] flex items-center gap-1 pl-8 font-medium">
+                          <AlertCircle className="w-2.5 h-2.5" /> Token expiring in {daysRemaining} days — reconnect to extend.
+                        </p>
+                      ) : daysRemaining !== null ? (
+                        <p className="text-[10px] text-[#475467] flex items-center gap-1 pl-8">
+                          <Clock className="w-2.5 h-2.5 text-[#0A66C2]" /> Token valid for {daysRemaining} days (until {expiresAt?.toLocaleDateString()}) • Standard 60-day token
+                        </p>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -782,29 +843,39 @@ function SocialAccountsContent() {
                           {showLinkedInPublisher ? 'Close Publisher' : 'Publish Post'}
                         </button>
                       )}
-                      {/* Reconnect (expired) */}
-                      {isExpired && (
+                      {/* Reconnect: available for standard 60-day tokens or when expiring/expired */}
+                      {(!hasRefreshToken || isExpired || isExpiringSoon) && (
                         <button
                           type="button"
                           onClick={handleLinkedInConnect}
-                          className="inline-flex items-center px-3 py-1.5 bg-[#17202A] text-white text-xs font-semibold rounded-lg hover:bg-black transition-all"
+                          className={`inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                            isExpired
+                              ? 'bg-[#B42318] text-white hover:bg-[#912018]'
+                              : isExpiringSoon
+                                ? 'bg-[#B45309] text-white hover:bg-[#92400E]'
+                                : 'border border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#F9FAFB]'
+                          }`}
+                          title="Re-authenticate with LinkedIn via OAuth to renew 60-day access token"
                         >
-                          <ExternalLink className="w-3.5 h-3.5 mr-1" /> Reconnect
+                          <ExternalLink className="w-3.5 h-3.5 mr-1" />
+                          {isExpired ? 'Reconnect' : isExpiringSoon ? 'Renew Token' : 'Reconnect'}
                         </button>
                       )}
-                      {/* Refresh Token */}
-                      <button
-                        type="button"
-                        onClick={() => void handleLinkedInRefresh()}
-                        disabled={isRefreshingLinkedIn}
-                        className="inline-flex items-center px-2.5 py-1.5 border border-[#D0D5DD] bg-white text-[#344054] text-xs font-semibold rounded-lg hover:bg-[#F9FAFB] transition-all disabled:opacity-50"
-                        title="Exchange stored refresh token for a new access token"
-                      >
-                        <RefreshCw
-                          className={`w-3.5 h-3.5 mr-1 ${isRefreshingLinkedIn ? 'animate-spin' : ''}`}
-                        />
-                        {isRefreshingLinkedIn ? 'Refreshing…' : 'Refresh Token'}
-                      </button>
+                      {/* Programmatic Refresh: ONLY available if enterprise/MDP refresh token exists */}
+                      {hasRefreshToken && (
+                        <button
+                          type="button"
+                          onClick={() => void handleLinkedInRefresh()}
+                          disabled={isRefreshingLinkedIn}
+                          className="inline-flex items-center px-2.5 py-1.5 border border-[#D0D5DD] bg-white text-[#344054] text-xs font-semibold rounded-lg hover:bg-[#F9FAFB] transition-all disabled:opacity-50"
+                          title="Exchange stored refresh token for a new access token"
+                        >
+                          <RefreshCw
+                            className={`w-3.5 h-3.5 mr-1 ${isRefreshingLinkedIn ? 'animate-spin' : ''}`}
+                          />
+                          {isRefreshingLinkedIn ? 'Refreshing…' : 'Refresh Token'}
+                        </button>
+                      )}
                       {/* Disconnect */}
                       <button
                         type="button"
@@ -1251,7 +1322,7 @@ function SocialAccountsContent() {
                   />
                   <div className="mt-2 p-2.5 rounded-lg bg-[#F9FAFB] border border-[#E4E7EC] flex items-center gap-2 text-[11px] text-[#667085]">
                     <Lock className="w-3.5 h-3.5 text-[#16803C] shrink-0" />
-                    <span>Tokens are encrypted at rest with AES-256-GCM.</span>
+                    <span>Your access token is securely encrypted and stored privately.</span>
                   </div>
                 </div>
               </div>

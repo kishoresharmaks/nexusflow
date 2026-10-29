@@ -99,12 +99,14 @@ export class InstagramIntegrationController {
       );
     }
 
-    const user = session.user;
+    const user = session.user as AuthenticatedUser;
     let targetWorkspaceId = query.workspaceId;
+    const membership = targetWorkspaceId
+      ? user.memberships?.find((m) => m.workspaceId === targetWorkspaceId)
+      : user.memberships?.[0];
 
     if (!targetWorkspaceId) {
-      const primaryMembership = user.memberships[0];
-      if (!primaryMembership) {
+      if (!membership) {
         if (query.json === 'true' || query.json === '1') {
           throw new BadRequestException('User does not belong to any workspace.');
         }
@@ -112,24 +114,36 @@ export class InstagramIntegrationController {
           `${this.instagramService.getFrontendUrl()}/social-accounts?instagram=failed&error=no_workspace`,
         );
       }
-      targetWorkspaceId = primaryMembership.workspaceId;
-    } else {
-      const membership = user.memberships.find((m) => m.workspaceId === targetWorkspaceId);
-      if (!membership) {
-        if (query.json === 'true' || query.json === '1') {
-          throw new ForbiddenException('User is not a member of the target workspace.');
-        }
-        return res.redirect(
-          `${this.instagramService.getFrontendUrl()}/social-accounts?instagram=failed&error=forbidden_workspace`,
-        );
+      targetWorkspaceId = membership.workspaceId;
+    } else if (!membership) {
+      if (query.json === 'true' || query.json === '1') {
+        throw new ForbiddenException('User is not a member of the target workspace.');
       }
+      return res.redirect(
+        `${this.instagramService.getFrontendUrl()}/social-accounts?instagram=failed&error=forbidden_workspace`,
+      );
+    }
+
+    if (!targetWorkspaceId) {
+      throw new BadRequestException('Workspace ID is required.');
+    }
+
+    if (
+      membership.role !== WorkspaceRole.OWNER &&
+      membership.role !== WorkspaceRole.ADMIN
+    ) {
+      if (query.json === 'true' || query.json === '1') {
+        throw new ForbiddenException('Only workspace Owners and Admins can connect Instagram.');
+      }
+      return res.redirect(
+        `${this.instagramService.getFrontendUrl()}/social-accounts?instagram=failed&error=forbidden_role`,
+      );
     }
 
     try {
       const authResult = await this.instagramService.getAuthorizationUrl(
         targetWorkspaceId,
         user.id,
-        query.redirectUri,
       );
 
       if (query.json === 'true' || query.json === '1') {

@@ -24,6 +24,7 @@ import { InstagramIntegrationModule } from './integrations/instagram/instagram.m
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { TrackingModule } from './tracking/tracking.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { SuperAdminModule } from './super-admin/super-admin.module';
 
 @Module({
   imports: [
@@ -56,11 +57,12 @@ import { AnalyticsModule } from './analytics/analytics.module';
     CampaignsModule,
     TrackingModule,
     AnalyticsModule,
+    SuperAdminModule,
     HealthModule,
   ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(LoggingMiddleware).forRoutes('*');
+    consumer.apply(LoggingMiddleware).forRoutes('{*path}');
   }
 }

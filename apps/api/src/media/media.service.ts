@@ -1,13 +1,12 @@
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  HeadBucketCommand,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -32,29 +31,24 @@ export interface PresignedDownloadResult {
 export class MediaService {
   private readonly logger = new Logger(MediaService.name);
   private readonly s3Client: S3Client;
-  private readonly s3Endpoint?: string;
+  private readonly s3Endpoint: string | undefined;
   private readonly s3Bucket: string;
   private readonly s3Region: string;
-  private readonly localStorageDir: string;
+  private readonly storageConfigured: boolean;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly configService: ConfigService,
   ) {
-    this.localStorageDir =
-      this.configService.get<string>('localMediaDir') ||
-      process.env['LOCAL_MEDIA_DIR'] ||
-      path.resolve(process.cwd(), 'uploads', 'media');
     const rawEndpoint =
       this.configService.get<string>('s3Endpoint') ||
-      process.env['S3_ENDPOINT'] ||
-      'http://localhost:9000';
+      process.env['S3_ENDPOINT'];
     this.s3Endpoint = rawEndpoint;
     this.s3Bucket =
       this.configService.get<string>('s3Bucket') ||
       process.env['S3_BUCKET'] ||
-      'commercepilot-media';
+      '';
     this.s3Region =
       this.configService.get<string>('s3Region') ||
       process.env['S3_REGION'] ||
@@ -63,15 +57,16 @@ export class MediaService {
     const accessKeyId =
       this.configService.get<string>('s3AccessKeyId') ||
       process.env['S3_ACCESS_KEY_ID'] ||
-      'minioadmin';
+      '';
     const secretAccessKey =
       this.configService.get<string>('s3SecretAccessKey') ||
       process.env['S3_SECRET_ACCESS_KEY'] ||
-      'minioadmin';
+      '';
     const forcePathStyle =
       (this.configService.get<string>('s3ForcePathStyle') ||
         process.env['S3_FORCE_PATH_STYLE']) !== 'false';
 
+    this.storageConfigured = Boolean(this.s3Bucket && accessKeyId && secretAccessKey);
     this.s3Client = new S3Client({
       region: this.s3Region,
       ...(this.s3Endpoint ? { endpoint: this.s3Endpoint } : {}),
@@ -81,6 +76,14 @@ export class MediaService {
       },
       forcePathStyle,
     });
+  }
+
+  private requireStorageConfiguration(): void {
+    if (!this.storageConfigured) {
+      throw new ServiceUnavailableException(
+        'Private object storage is not configured. Set S3_BUCKET, S3_ACCESS_KEY_ID, and S3_SECRET_ACCESS_KEY server-side.',
+      );
+    }
   }
 
   private validateObjectId(id: string, label = 'ID'): void {
@@ -102,36 +105,30 @@ export class MediaService {
     dto: RequestUploadUrlDto,
   ): Promise<PresignedUploadResult> {
     this.validateObjectId(workspaceId, 'workspace ID');
+    this.requireStorageConfiguration();
 
     const cleanName = this.sanitizeFilename(dto.filename);
     const uniqueId = randomUUID();
     const storageKey = `workspaces/${workspaceId}/media/${uniqueId}-${cleanName}`;
     const expiresInSeconds = 900; // 15 minutes
 
-    let uploadUrl: string;
     try {
       const command = new PutObjectCommand({
         Bucket: this.s3Bucket,
         Key: storageKey,
         ContentType: dto.mimeType,
       });
-      uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
+      const uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: expiresInSeconds });
+      return {
+        uploadUrl,
+        storageKey,
+        expiresInSeconds,
+        expectedHeaders: { 'Content-Type': dto.mimeType },
+      };
     } catch (error) {
       this.logger.error(`Failed to generate S3 presigned PUT URL: ${(error as Error).message}`);
-      if (process.env['NODE_ENV'] === 'production' || process.env['NODE_ENV'] === 'staging') {
-        throw new BadRequestException('Failed to generate pre-signed upload URL from storage service.');
-      }
-      uploadUrl = `${this.s3Endpoint}/${this.s3Bucket}/${storageKey}?mockSig=true`;
+      throw new ServiceUnavailableException('Unable to generate a secure upload URL from object storage.');
     }
-
-    return {
-      uploadUrl,
-      storageKey,
-      expiresInSeconds,
-      expectedHeaders: {
-        'Content-Type': dto.mimeType,
-      },
-    };
   }
 
   /**
@@ -145,6 +142,7 @@ export class MediaService {
     clientIp?: string,
   ): Promise<MediaAsset> {
     this.validateObjectId(workspaceId, 'workspace ID');
+    this.requireStorageConfiguration();
 
     // Ensure storageKey belongs to this tenant
     if (!dto.storageKey.startsWith(`workspaces/${workspaceId}/`)) {
@@ -166,16 +164,9 @@ export class MediaService {
         dto.mimeType = head.ContentType;
       }
     } catch (err: unknown) {
-      const errorMsg = (err as Error)?.message || 'HeadObject failed';
-      if (process.env['NODE_ENV'] === 'production' || process.env['NODE_ENV'] === 'staging') {
-        throw new BadRequestException(
-          `Uploaded object could not be verified in storage: ${errorMsg}`,
-        );
-      }
-      this.logger.debug(`S3 HeadObject verification skipped in dev/test: ${errorMsg}`);
+      this.logger.warn(`HeadObject verification failed: ${(err as Error)?.message || 'unknown error'}`);
+      throw new BadRequestException('Uploaded object could not be verified in private object storage.');
     }
-
-    const publicUrl = `${this.s3Endpoint}/${this.s3Bucket}/${dto.storageKey}`;
 
     const asset = await this.prisma.mediaAsset.create({
       data: {
@@ -186,7 +177,8 @@ export class MediaService {
         fileSizeBytes: dto.fileSizeBytes,
         width: dto.width ?? null,
         height: dto.height ?? null,
-        url: publicUrl,
+        // Private assets are retrieved only through the authenticated download-url endpoint.
+        url: '',
       },
     });
 
@@ -215,6 +207,7 @@ export class MediaService {
     expiresInSeconds = 300,
   ): Promise<PresignedDownloadResult> {
     this.validateObjectId(workspaceId, 'workspace ID');
+    this.requireStorageConfiguration();
     this.validateObjectId(assetId, 'asset ID');
 
     const asset = await this.prisma.mediaAsset.findFirst({
@@ -234,114 +227,8 @@ export class MediaService {
       return { downloadUrl, expiresInSeconds };
     } catch (error) {
       this.logger.error(`Failed to generate S3 presigned GET URL: ${(error as Error).message}`);
-      if (process.env['NODE_ENV'] === 'production' || process.env['NODE_ENV'] === 'staging') {
-        throw new BadRequestException('Failed to generate secure download URL.');
-      }
-      return {
-        downloadUrl: `${this.s3Endpoint}/${this.s3Bucket}/${asset.storageKey}?mockSig=true`,
-        expiresInSeconds,
-      };
+      throw new ServiceUnavailableException('Unable to generate a secure download URL from object storage.');
     }
-  }
-
-  /**
-   * Directly uploads and saves media file to local disk storage for the workspace.
-   * Path: uploads/media/:workspaceId/:uniqueId-:cleanName
-   * Serves files through /api/v1/media/:workspaceId/:assetId/file
-   */
-  async uploadLocalFile(
-    workspaceId: string,
-    file: { originalname?: string; mimetype?: string; size: number; buffer: Buffer },
-    userId: string,
-    clientIp?: string,
-  ): Promise<MediaAsset> {
-    this.validateObjectId(workspaceId, 'workspace ID');
-
-    if (!file || !file.buffer) {
-      throw new BadRequestException('No file buffer provided for local upload.');
-    }
-
-    const cleanName = this.sanitizeFilename(file.originalname || 'upload.png');
-    const uniqueId = randomUUID();
-    const storageKey = `workspaces/${workspaceId}/media/${uniqueId}-${cleanName}`;
-
-    const wsDir = path.join(this.localStorageDir, workspaceId);
-    if (!fs.existsSync(wsDir)) {
-      fs.mkdirSync(wsDir, { recursive: true });
-    }
-
-    const filePath = path.join(wsDir, `${uniqueId}-${cleanName}`);
-    fs.writeFileSync(filePath, file.buffer);
-
-    const apiBase =
-      this.configService.get<string>('apiUrl') ||
-      process.env['API_URL'] ||
-      'http://localhost:4000';
-
-    const asset = await this.prisma.mediaAsset.create({
-      data: {
-        workspaceId,
-        storageKey,
-        originalFilename: file.originalname || cleanName,
-        mimeType: file.mimetype || 'application/octet-stream',
-        fileSizeBytes: file.size,
-        url: '',
-      },
-    });
-
-    const fileUrl = `${apiBase.replace(/\/+$/, '')}/api/v1/media/${workspaceId}/${asset.id}/file`;
-    const updatedAsset = await this.prisma.mediaAsset.update({
-      where: { id: asset.id },
-      data: { url: fileUrl },
-    });
-
-    await this.auditService.record({
-      workspaceId,
-      userId,
-      action: 'MEDIA_ASSET_UPLOADED',
-      resourceType: 'MediaAsset',
-      resourceId: updatedAsset.id,
-      metadata: {
-        filename: updatedAsset.originalFilename,
-        fileSizeBytes: updatedAsset.fileSizeBytes,
-        storage: 'local',
-      },
-      ipAddress: clientIp,
-    });
-
-    return updatedAsset;
-  }
-
-  /**
-   * Retrieves binary file details from local disk storage.
-   */
-  async getLocalFile(
-    workspaceId: string,
-    assetId: string,
-  ): Promise<{ filePath: string; mimeType: string; originalFilename: string }> {
-    this.validateObjectId(workspaceId, 'workspace ID');
-    this.validateObjectId(assetId, 'asset ID');
-
-    const asset = await this.prisma.mediaAsset.findFirst({
-      where: { id: assetId, workspaceId },
-    });
-
-    if (!asset) {
-      throw new NotFoundException('Media asset not found in this workspace.');
-    }
-
-    const fileName = path.basename(asset.storageKey);
-    const filePath = path.join(this.localStorageDir, workspaceId, fileName);
-
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException('Media file not found in local storage.');
-    }
-
-    return {
-      filePath,
-      mimeType: asset.mimeType,
-      originalFilename: asset.originalFilename,
-    };
   }
 
   /**
@@ -376,20 +263,7 @@ export class MediaService {
       throw new NotFoundException('Media asset not found in this workspace.');
     }
 
-    // Attempt local storage file removal
-    if (asset.storageKey) {
-      try {
-        const fileName = path.basename(asset.storageKey);
-        const localFilePath = path.join(this.localStorageDir, workspaceId, fileName);
-        if (fs.existsSync(localFilePath)) {
-          fs.unlinkSync(localFilePath);
-        }
-      } catch (localErr) {
-        this.logger.warn(`Failed to delete local media file: ${(localErr as Error).message}`);
-      }
-    }
-
-    // Attempt S3 storage removal if configured
+    this.requireStorageConfiguration();
     try {
       await this.s3Client.send(
         new DeleteObjectCommand({
@@ -399,6 +273,7 @@ export class MediaService {
       );
     } catch (s3Err) {
       this.logger.warn(`Failed to delete object from S3 storage: ${(s3Err as Error).message}`);
+      throw new ServiceUnavailableException('Object deletion could not be confirmed; media metadata was preserved.');
     }
 
     await this.prisma.mediaAsset.delete({
@@ -466,5 +341,22 @@ export class MediaService {
     }
 
     return { valid: true };
+  }
+
+  /**
+   * Diagnostic probe to verify live S3 bucket connectivity.
+   */
+  async checkS3Connectivity(): Promise<{ connected: boolean; bucket: string; region: string; error?: string }> {
+    try {
+      await this.s3Client.send(new HeadBucketCommand({ Bucket: this.s3Bucket }));
+      return { connected: true, bucket: this.s3Bucket, region: this.s3Region };
+    } catch (err) {
+      return {
+        connected: false,
+        bucket: this.s3Bucket,
+        region: this.s3Region,
+        error: (err as Error).message,
+      };
+    }
   }
 }

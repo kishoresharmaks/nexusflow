@@ -1,0 +1,24 @@
+# NexusFlow (CommercePilot)
+
+> AI-Powered Commerce Marketing & Omnichannel Social Automation
+
+NexusFlow connects online store product catalogs directly to AI-assisted marketing campaigns with human-in-the-loop review, automated publishing to official channels (Meta Instagram & LinkedIn), and verified closed-loop order attribution.
+
+## Core Capabilities
+
+- **Catalog Ingestion**: Synchronize product variants, pricing, media, and inventory from Shopify and custom store webhooks.
+- **Grounded AI Studio**: Create marketing copy anchored to real catalog data with zero hallucinations.
+- **Maker-Checker Governance**: Multi-tiered review flows requiring administrative approval before any scheduled release.
+- **Omnichannel Publishing**: Automated release through official Meta Graph API v21.0 (Instagram Business) and LinkedIn Marketing API.
+- **Attribution & Analytics**: Track order revenue mapped directly to specific social posts and campaigns using UTM parameters and signed order webhooks.
+
+## Public Resources
+
+- [Home Page](https://nexusflow.ai/): Overview of features, interactive studio, and customer governance.
+- [Developer Portal](https://nexusflow.ai/developers): Integration guide for custom store webhooks, order attribution, and product ingest APIs.
+- [App Registration](https://nexusflow.ai/register): Create a new merchant or agency workspace.
+
+## Machine-Readable Endpoints
+
+- OpenAPI Specification: /api/v1/docs-json
+- Webhooks Endpoint: /api/v1/webhooks/orders

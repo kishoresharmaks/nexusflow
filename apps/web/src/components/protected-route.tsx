@@ -14,7 +14,7 @@ interface ProtectedRouteProps {
 export function ProtectedRoute({
   children,
   fallbackTitle = 'Authentication Required',
-  fallbackDescription = 'Please log in to your CommercePilot account to view and manage this section.',
+  fallbackDescription = 'Please log in to your NexusFlow account to view and manage this section.',
 }: ProtectedRouteProps) {
   const { user, token, isLoading, quickDemoLogin } = useAuth();
 

@@ -118,8 +118,8 @@ describe('LinkedIn Integration — Service Unit Tests', () => {
         workspaceId,
         provider: SocialProvider.LINKEDIN,
         providerAccountId: 'li_mock_member_782bb4',
-        displayName: 'CommercePilot LinkedIn Member',
-        username: 'CommercePilot LinkedIn Member',
+        displayName: 'NexusFlow LinkedIn Member',
+        username: 'NexusFlow LinkedIn Member',
         encryptedAccessToken: encryptToken('mock_li_token_123'),
         scopes: ['openid', 'profile', 'w_member_social'],
         status: SocialAccountStatus.ACTIVE,
@@ -136,7 +136,7 @@ describe('LinkedIn Integration — Service Unit Tests', () => {
       expect(result.success).toBe(true);
       expect(result.workspaceId).toBe(workspaceId);
       expect(result.accountId).toBe(mockSavedAccount.id);
-      expect(result.memberName).toBe('CommercePilot LinkedIn Member');
+      expect(result.memberName).toBe('NexusFlow LinkedIn Member');
       expect(result.redirectUrl).toContain('linkedin=connected');
 
       // Verify Prisma upsert was called with encrypted token and correct workspaceId
@@ -202,6 +202,31 @@ describe('LinkedIn Integration — Service Unit Tests', () => {
       // Crucial security check: no token fields present in output
       expect((status.account as any).encryptedAccessToken).toBeUndefined();
       expect((status.account as any).encryptedRefreshToken).toBeUndefined();
+      expect(status.account?.hasRefreshToken).toBe(true);
+    });
+
+    it('returns hasRefreshToken=false for standard LinkedIn accounts without refresh token', async () => {
+      const standardAccount = {
+        id: 'acc_li_standard',
+        workspaceId,
+        provider: SocialProvider.LINKEDIN,
+        displayName: 'Standard User',
+        username: 'standard-user',
+        providerAccountId: 'urn:li:person:777666',
+        scopes: ['openid', 'profile', 'w_member_social'],
+        status: SocialAccountStatus.ACTIVE,
+        encryptedAccessToken: 'iv:tag:cipher-must-never-leak',
+        encryptedRefreshToken: null,
+        tokenExpiresAt: new Date(Date.now() + 5184000 * 1000),
+        createdAt: new Date(),
+      };
+
+      mockPrisma.socialAccount.findFirst.mockResolvedValue(standardAccount);
+
+      const status = await service.getStatus(workspaceId);
+
+      expect(status.connected).toBe(true);
+      expect(status.account?.hasRefreshToken).toBe(false);
     });
   });
 
@@ -302,7 +327,7 @@ describe('LinkedIn Integration — Service Unit Tests', () => {
       const outcome = await service.publishPost(
         workspaceId,
         userId,
-        'Announcing CommercePilot v1 on LinkedIn!',
+        'Announcing NexusFlow v1 on LinkedIn!',
       );
 
       expect(outcome.success).toBe(true);

@@ -18,12 +18,14 @@ interface AuthContextType {
     email: string,
     password: string,
     workspaceName?: string,
+    invitationToken?: string,
   ) => Promise<void>;
   logout: () => Promise<void>;
   switchWorkspace: (workspaceId: string) => void;
   createWorkspace: (name: string) => Promise<Workspace>;
   quickDemoLogin: () => Promise<void>;
   refreshWorkspaces: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 interface AuthProviderProps {
@@ -71,6 +73,19 @@ export function AuthProvider({
     }
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    try {
+      const res = await api.getMe();
+      if (!isMountedRef.current || typeof window === 'undefined') return;
+      setUser(res.user);
+      if (res.workspaces && res.workspaces.length > 0) {
+        setWorkspaces(res.workspaces);
+      }
+    } catch {
+      // Ignored if unauthorized
+    }
+  }, []);
+
   const refreshWorkspaces = useCallback(async () => {
     try {
       const list = await api.getWorkspaces();
@@ -103,8 +118,8 @@ export function AuthProvider({
     const savedToken = api.getToken();
     if (savedToken) {
       setToken(savedToken);
-      // Attempt to load workspaces with existing token
-      refreshWorkspaces().finally(() => {
+      // Attempt to load workspaces and profile with existing token
+      Promise.all([refreshWorkspaces(), refreshUser()]).finally(() => {
         if (isMountedRef.current) {
           setIsLoading(false);
         }
@@ -142,10 +157,11 @@ export function AuthProvider({
     email: string,
     password: string,
     workspaceName?: string,
+    invitationToken?: string,
   ): Promise<void> => {
     setIsLoading(true);
     try {
-      const res = await api.register(name, email, password, workspaceName);
+      const res = await api.register(name, email, password, workspaceName, invitationToken);
       setUser(res.user);
       setToken(res.sessionToken);
       await refreshWorkspaces();
@@ -227,6 +243,7 @@ export function AuthProvider({
         createWorkspace,
         quickDemoLogin,
         refreshWorkspaces,
+        refreshUser,
       }}
     >
       {children}

@@ -22,4 +22,9 @@ export class UpdateWorkspaceDto {
   @IsOptional()
   @IsString()
   currency?: string;
+
+  @ApiPropertyOptional({ example: 'https://cdn.nexusflow.app/workspaces/123/media/logo.png', description: 'Workspace brand logo or avatar URL' })
+  @IsOptional()
+  @IsString()
+  logoUrl?: string;
 }

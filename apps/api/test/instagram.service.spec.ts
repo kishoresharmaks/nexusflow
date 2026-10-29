@@ -52,7 +52,7 @@ describe('Instagram Integration — Service Unit Tests', () => {
     it('generates a valid Meta OAuth URL with Instagram scopes and signed state', async () => {
       const result = await service.getAuthorizationUrl(workspaceId, userId);
 
-      expect(result.authUrl).toContain('https://www.facebook.com/v19.0/dialog/oauth');
+      expect(result.authUrl).toMatch(/https:\/\/www\.facebook\.com\/v\d+\.\d+\/dialog\/oauth/);
       expect(result.authUrl).toContain('response_type=code');
       expect(result.authUrl).toContain('instagram_basic');
       expect(result.authUrl).toContain('instagram_content_publish');

@@ -8,11 +8,7 @@ import {
   Req,
   UseGuards,
   Query,
-  UseInterceptors,
-  UploadedFile,
-  BadRequestException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
@@ -20,7 +16,6 @@ import {
   ApiBearerAuth,
   ApiParam,
   ApiQuery,
-  ApiConsumes,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { MediaService, PresignedUploadResult, PresignedDownloadResult } from './media.service';
@@ -38,31 +33,6 @@ import { WorkspaceRole, MediaAsset } from '@commercepilot/database';
 @Controller('workspaces/:workspaceId/media')
 export class MediaController {
   constructor(private readonly mediaService: MediaService) {}
-
-  @Post('upload')
-  @UseGuards(RolesGuard)
-  @Roles(WorkspaceRole.OWNER, WorkspaceRole.ADMIN, WorkspaceRole.MEMBER)
-  @UseInterceptors(
-    FileInterceptor('file', {
-      limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
-    }),
-  )
-  @ApiOperation({ summary: 'Directly upload media asset to local storage' })
-  @ApiConsumes('multipart/form-data')
-  @ApiParam({ name: 'workspaceId', description: '24-character hex MongoDB ObjectId' })
-  @ApiResponse({ status: 201, description: 'MediaAsset record registered in local storage' })
-  async uploadLocalFile(
-    @Param('workspaceId') workspaceId: string,
-    @UploadedFile() file: { originalname?: string; mimetype?: string; size: number; buffer: Buffer },
-    @CurrentUser() user: AuthenticatedUser,
-    @Req() req: Request,
-  ): Promise<MediaAsset> {
-    if (!file) {
-      throw new BadRequestException('No file provided for upload.');
-    }
-    const ip = (req.headers['x-forwarded-for'] as string) || req.ip;
-    return this.mediaService.uploadLocalFile(workspaceId, file, user.id, ip);
-  }
 
   @Post('upload-url')
   @UseGuards(RolesGuard)

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AuthService } from '../src/auth/auth.service';
 import { WorkspaceRole } from '@commercepilot/database';
-import { ConflictException, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { ConflictException, UnauthorizedException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import type { PrismaService } from '../src/database/prisma.service';
 import type { AuditService } from '../src/audit/audit.service';
 import { hash } from '@node-rs/argon2';
@@ -32,6 +32,13 @@ describe('AuthService', () => {
         findUnique: vi.fn(),
         update: vi.fn(),
         updateMany: vi.fn(),
+      },
+      platformSetting: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      workspaceInvitation: {
+        findFirst: vi.fn().mockResolvedValue(null),
       },
     };
 
@@ -106,6 +113,58 @@ describe('AuthService', () => {
           name: 'Jane',
         }),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ForbiddenException if allow_public_registrations is disabled and no invite provided', async () => {
+      mockPrisma.platformSetting.findUnique.mockImplementation(({ where }: any) => {
+        if (where.key === 'allow_public_registrations') {
+          return Promise.resolve({ key: 'allow_public_registrations', value: { enabled: false } });
+        }
+        return Promise.resolve(null);
+      });
+
+      await expect(
+        authService.register({
+          email: 'newuser@example.com',
+          password: 'Password123!',
+          name: 'Restricted User',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should allow registration when public registration is disabled if a valid invitationToken is present', async () => {
+      mockPrisma.platformSetting.findUnique.mockImplementation(({ where }: any) => {
+        if (where.key === 'allow_public_registrations') {
+          return Promise.resolve({ key: 'allow_public_registrations', value: { enabled: false } });
+        }
+        return Promise.resolve(null);
+      });
+
+      mockPrisma.workspaceInvitation.findFirst.mockResolvedValue({
+        id: 'invite_1',
+        emailNormalized: 'invited@example.com',
+        tokenHash: 'hashed_token_123',
+        expiresAt: new Date(Date.now() + 86400000),
+      });
+
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.user.create.mockResolvedValue({
+        id: 'user_invited',
+        email: 'invited@example.com',
+        name: 'Invited Member',
+      });
+      mockPrisma.workspace.create.mockResolvedValue({ id: 'ws_inv', name: "Invited Member's Workspace", slug: 'slug-inv' });
+      mockPrisma.membership.create.mockResolvedValue({ id: 'mem_inv' });
+      mockPrisma.session.create.mockResolvedValue({ id: 'sess_inv' });
+
+      const res = await authService.register({
+        email: 'invited@example.com',
+        password: 'Password123!',
+        name: 'Invited Member',
+        invitationToken: 'valid_token_123',
+      });
+
+      expect(res.user.email).toBe('invited@example.com');
     });
   });
 

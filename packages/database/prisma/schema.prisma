@@ -28,6 +28,7 @@ enum PostStatus {
   SCHEDULED
   PUBLISHING
   PUBLISHED
+  UNKNOWN_OUTCOME
   FAILED
   CANCELLED
 }
@@ -42,6 +43,7 @@ enum AttemptStatus {
   PENDING
   SUCCESS
   FAILED
+  UNKNOWN
 }
 
 enum SocialProvider {
@@ -76,6 +78,13 @@ enum SubscriptionStatus {
   UNPAID
 }
 
+enum BillingOrderStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+}
+
 enum StorePlatform {
   SHOPIFY
   WOOCOMMERCE
@@ -89,23 +98,77 @@ enum StoreSyncStatus {
   FAILED
 }
 
+enum PlatformRole {
+  SUPER_ADMIN
+  SUPPORT_ADMIN
+  BILLING_ADMIN
+}
+
+enum PlatformAdminStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum WorkspaceStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum UserAccountStatus {
+  PENDING_ACTIVATION
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum MembershipStatus {
+  PENDING_ACCEPTANCE
+  ACTIVE
+  SUSPENDED
+  REMOVED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum EmailDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
 model User {
-  id                               String         @id @default(auto()) @map("_id") @db.ObjectId
-  email                            String         @unique
+  id                               String            @id @default(auto()) @map("_id") @db.ObjectId
+  email                            String            @unique
   passwordHash                     String
   name                             String
-  isEmailVerified                  Boolean        @default(false)
+  accountStatus                    UserAccountStatus @default(ACTIVE)
+  activationTokenHash              String?
+  activationTokenExpiresAt         DateTime?
+  activatedAt                      DateTime?
+  isEmailVerified                  Boolean           @default(false)
+  emailVerifiedAt                  DateTime?
   emailVerificationToken           String?
   emailVerificationTokenExpiresAt  DateTime?
   passwordResetToken               String?
   passwordResetTokenExpiresAt      DateTime?
-  createdAt                        DateTime       @default(now())
-  updatedAt                        DateTime       @updatedAt
+  isSuspended                      Boolean           @default(false)
+  suspendedAt                      DateTime?
+  suspensionReason                 String?
+  createdAt                        DateTime          @default(now())
+  updatedAt                        DateTime          @updatedAt
 
   sessions                         Session[]
   memberships                      Membership[]
   auditEvents                      AuditEvent[]
   notifications                    Notification[]
+  platformAdmin                    PlatformAdmin?
 }
 
 model Session {
@@ -128,6 +191,11 @@ model Workspace {
   timezone           String              @default("UTC")
   locale             String              @default("en-US")
   currency           String              @default("USD")
+  status             WorkspaceStatus     @default(ACTIVE)
+  suspendedAt        DateTime?
+  suspensionReason   String?
+  planTier           String              @default("FREE")
+  customQuotas       Json?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -142,6 +210,7 @@ model Workspace {
   posts              Post[]
   subscriptions      Subscription[]
   billingEvents      BillingEvent[]
+  billingOrders      BillingOrder[]
   usageLedgers       UsageLedger[]
   aiUsages           AiUsage[]
   analyticsSnapshots AnalyticsSnapshot[]
@@ -153,34 +222,43 @@ model Workspace {
   storeConnections   StoreConnection[]
   invitations        WorkspaceInvitation[]
   ownershipTransfers OwnershipTransfer[]
+  approvalPolicy     ApprovalPolicy?
+  trackingLinks      TrackingLink[]
 }
 
 model Membership {
-  id          String        @id @default(auto()) @map("_id") @db.ObjectId
-  workspaceId String        @db.ObjectId
-  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  userId      String        @db.ObjectId
-  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role        WorkspaceRole @default(MEMBER)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id               String           @id @default(auto()) @map("_id") @db.ObjectId
+  workspaceId      String           @db.ObjectId
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId           String           @db.ObjectId
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role             WorkspaceRole    @default(MEMBER)
+  status           MembershipStatus @default(ACTIVE)
+  suspendedAt      DateTime?
+  suspensionReason String?
+  joinedAt         DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   @@unique([workspaceId, userId])
 }
 
 model WorkspaceInvitation {
-  id              String        @id @default(auto()) @map("_id") @db.ObjectId
-  workspaceId     String        @db.ObjectId
-  workspace       Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id              String           @id @default(auto()) @map("_id") @db.ObjectId
+  workspaceId     String           @db.ObjectId
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   emailNormalized String
   role            WorkspaceRole
-  tokenHash       String        @unique
-  invitedByUserId String        @db.ObjectId
+  status          InvitationStatus    @default(PENDING)
+  emailDeliveryStatus EmailDeliveryStatus @default(PENDING)
+  emailDeliveryError  String?
+  tokenHash       String              @unique
+  invitedByUserId String           @db.ObjectId
   expiresAt       DateTime
   acceptedAt      DateTime?
   revokedAt       DateTime?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   @@index([workspaceId, emailNormalized, createdAt])
   @@index([emailNormalized, expiresAt])
@@ -201,6 +279,18 @@ model OwnershipTransfer {
 
   @@index([workspaceId, status, expiresAt])
   @@index([toUserId, status, expiresAt])
+}
+
+model ApprovalPolicy {
+  id                             String          @id @default(auto()) @map("_id") @db.ObjectId
+  workspaceId                    String          @unique @db.ObjectId
+  workspace                      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requiresApprovalBeforeSchedule Boolean         @default(false)
+  requiresApprovalBeforePublish  Boolean         @default(true)
+  allowedApproverRoles           WorkspaceRole[] @default([OWNER, ADMIN])
+  updatedByUserId                String?         @db.ObjectId
+  createdAt                      DateTime        @default(now())
+  updatedAt                      DateTime        @updatedAt
 }
 
 model Product {
@@ -317,6 +407,10 @@ model Campaign {
 
   posts         Post[]
   trackedClicks TrackedClick[]
+  conversions   ConversionEvent[]
+  trackingLinks TrackingLink[]
+
+  @@index([workspaceId, createdAt])
 }
 
 model Post {
@@ -329,15 +423,17 @@ model Post {
   product         Product?         @relation(fields: [productId], references: [id])
   socialAccountId String?          @db.ObjectId
   socialAccount   SocialAccount?   @relation(fields: [socialAccountId], references: [id])
-  status          PostStatus       @default(DRAFT)
-  content         String
-  mediaUrls       String[]
-  scheduledAt     DateTime?
-  publishedAt     DateTime?
-  providerPostId  String?
-  idempotencyKey  String?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  status                  PostStatus       @default(DRAFT)
+  content                 String
+  mediaUrls               String[]
+  scheduledAt             DateTime?
+  publishedAt             DateTime?
+  providerPostId          String?
+  idempotencyKey          String?
+  reconciliationAttempts  Int              @default(0)
+  reconciliationDueAt     DateTime?
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
 
   approvals       Approval[]
   publishAttempts PublishAttempt[]
@@ -412,6 +508,24 @@ model BillingEvent {
   createdAt         DateTime  @default(now())
 }
 
+model BillingOrder {
+  id                String              @id @default(auto()) @map("_id") @db.ObjectId
+  workspaceId       String              @db.ObjectId
+  workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  planId            String
+  razorpayOrderId   String              @unique
+  amountCents       Int
+  currency          String              @default("USD")
+  status            BillingOrderStatus  @default(PENDING)
+  receipt           String?
+  providerPaymentId String?
+  confirmedAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([workspaceId, createdAt])
+}
+
 model UsageLedger {
   id           String    @id @default(auto()) @map("_id") @db.ObjectId
   workspaceId  String    @db.ObjectId
@@ -452,26 +566,63 @@ model AnalyticsSnapshot {
 }
 
 model TrackedClick {
-  id          String    @id @default(auto()) @map("_id") @db.ObjectId
-  workspaceId String    @db.ObjectId
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  campaignId  String?   @db.ObjectId
-  campaign    Campaign? @relation(fields: [campaignId], references: [id])
-  targetUrl   String
-  referrer    String?
-  country     String?
-  clickedAt   DateTime  @default(now())
+  id             String            @id @default(auto()) @map("_id") @db.ObjectId
+  workspaceId    String            @db.ObjectId
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaignId     String?           @db.ObjectId
+  campaign       Campaign?         @relation(fields: [campaignId], references: [id])
+  trackingLinkId String?           @db.ObjectId
+  trackingLink   TrackingLink?     @relation(fields: [trackingLinkId], references: [id], onDelete: SetNull)
+  targetUrl      String
+  referrer       String?
+  country        String?
+  userAgent      String?
+  ipHash         String?
+  clickedAt      DateTime          @default(now())
+
+  conversions    ConversionEvent[]
+
+  @@index([workspaceId, campaignId, clickedAt])
 }
 
 model ConversionEvent {
-  id                String    @id @default(auto()) @map("_id") @db.ObjectId
-  workspaceId       String    @db.ObjectId
-  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id                String        @id @default(auto()) @map("_id") @db.ObjectId
+  workspaceId       String        @db.ObjectId
+  workspace         Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaignId        String?       @db.ObjectId
+  campaign          Campaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  clickId           String?       @db.ObjectId
+  click             TrackedClick? @relation(fields: [clickId], references: [id], onDelete: SetNull)
   orderId           String
   orderTotalCents   Int
-  currency          String    @default("USD")
+  currency          String        @default("USD")
   attributionSource String?
-  occurredAt        DateTime  @default(now())
+  occurredAt        DateTime      @default(now())
+
+  @@unique([workspaceId, orderId])
+  @@index([workspaceId, campaignId, occurredAt])
+}
+
+model TrackingLink {
+  id             String         @id @default(auto()) @map("_id") @db.ObjectId
+  workspaceId    String         @db.ObjectId
+  workspace      Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaignId     String?        @db.ObjectId
+  campaign       Campaign?      @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  shortCode      String         @unique
+  destinationUrl String
+  utmSource      String
+  utmMedium      String
+  utmCampaign    String?
+  utmContent     String?
+  utmTerm        String?
+  clickCount     Int            @default(0)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  clicks         TrackedClick[]
+
+  @@index([workspaceId, campaignId])
 }
 
 model Notification {
@@ -521,4 +672,81 @@ model StoreConnection {
   updatedAt       DateTime        @updatedAt
 
   @@unique([workspaceId, platform, storeUrl])
+}
+
+model PlatformAdmin {
+  id               String              @id @default(auto()) @map("_id") @db.ObjectId
+  userId           String              @unique @db.ObjectId
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role             PlatformRole        @default(SUPER_ADMIN)
+  status           PlatformAdminStatus @default(ACTIVE)
+  permissions      String[]            @default([])
+  createdBy        String?
+  suspensionReason String?
+  suspendedAt      DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+}
+
+model AdminAuditLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  actorId    String   @db.ObjectId
+  actorEmail String
+  action     String
+  targetType String
+  targetId   String?
+  reason     String?
+  outcome    String   @default("SUCCESS")
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([targetType, targetId])
+  @@index([actorId, createdAt])
+}
+
+model PlatformSetting {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  key         String   @unique
+  value       Json
+  description String?
+  isPublic    Boolean  @default(false)
+  updatedBy   String?
+  version     Int      @default(1)
+  updatedAt   DateTime @updatedAt
+}
+
+model AdminAnnouncement {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  content     String
+  audience    String    @default("ALL")
+  isPublished Boolean   @default(false)
+  publishedAt DateTime?
+  expiresAt   DateTime?
+  createdBy   String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model EmailOutbox {
+  id              String              @id @default(auto()) @map("_id") @db.ObjectId
+  workspaceId     String?             @db.ObjectId
+  to              String
+  subject         String
+  provider        String
+  status          EmailDeliveryStatus @default(PENDING)
+  errorMessage    String?
+  attempts        Int                 @default(0)
+  lastAttemptAt   DateTime?
+  sentAt          DateTime?
+  metadata        Json?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([status, createdAt])
+  @@index([to, createdAt])
+  @@index([workspaceId, createdAt])
 }

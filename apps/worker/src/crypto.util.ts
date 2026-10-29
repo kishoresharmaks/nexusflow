@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 12; // 96-bit IV recommended for GCM
 const AUTH_TAG_LENGTH = 16;
 
 function getEncryptionKey(): Buffer {
@@ -15,6 +16,24 @@ function getEncryptionKey(): Buffer {
     throw new Error('TOKEN_ENCRYPTION_KEY must be configured in production/staging environments.');
   }
   return crypto.createHash('sha256').update('commercepilot-dev-token-encryption-key-2026').digest();
+}
+
+/**
+ * Encrypt a plaintext token using AES-256-GCM with authentication tag.
+ * Returns format: iv:tag:ciphertext (base64 encoded parts)
+ */
+export function encryptToken(plainText: string): string {
+  const key = getEncryptionKey();
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv, {
+    authTagLength: AUTH_TAG_LENGTH,
+  });
+
+  let encrypted = cipher.update(plainText, 'utf8', 'base64');
+  encrypted += cipher.final('base64');
+  const authTag = cipher.getAuthTag().toString('base64');
+
+  return `${iv.toString('base64')}:${authTag}:${encrypted}`;
 }
 
 /**

@@ -281,4 +281,56 @@ describe('ProductsService', () => {
       expect(result.failedRows).toBe(2);
     });
   });
+
+  describe('Live Store Freshness Verification & SKU Sync', () => {
+    it('refreshes product freshness and re-fetches live SKU and stock from connected store', async () => {
+      const mockStoreService = {
+        refreshProductFromStore: vi.fn().mockResolvedValue({
+          id: productId,
+          workspaceId,
+          sku: 'SAMPLE-SKU',
+          title: 'The Collection Snowboard: Liquid',
+          priceCents: 74995,
+          currency: 'INR',
+          inventoryCount: 50,
+          source: 'SHOPIFY',
+          sourceId: '15395589685357',
+          freshnessCheckedAt: new Date(),
+          updatedAt: new Date(),
+          createdAt: new Date(),
+        }),
+      };
+
+      const serviceWithStore = new ProductsService(
+        mockPrisma as unknown as PrismaService,
+        mockAuditService as AuditService,
+        mockStoreService as any,
+      );
+
+      mockPrisma.product.findFirst.mockResolvedValue({
+        id: productId,
+        workspaceId,
+        sku: null,
+        title: 'The Collection Snowboard: Liquid',
+        source: 'SHOPIFY',
+        sourceId: '15395589685357',
+      });
+
+      const result = await serviceWithStore.refreshProductFreshness(workspaceId, productId, userId);
+
+      expect(mockStoreService.refreshProductFromStore).toHaveBeenCalledWith(workspaceId, productId);
+      expect(result.sku).toBe('SAMPLE-SKU');
+      expect(result.isStale).toBe(false);
+      expect(mockAuditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'PRODUCT_FRESHNESS_CHECKED',
+          resourceId: productId,
+          metadata: expect.objectContaining({
+            sku: 'SAMPLE-SKU',
+            refreshedFromStore: true,
+          }),
+        }),
+      );
+    });
+  });
 });

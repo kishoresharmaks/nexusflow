@@ -1,6 +1,6 @@
-# CommercePilot
+# NexusFlow
 
-CommercePilot is an AI-powered commerce marketing platform for ecommerce sellers, brands, and agencies. It connects product catalog data to social content creation, approval, scheduling, publishing, engagement, and measurable campaign outcomes.
+NexusFlow is an AI-powered commerce marketing platform for ecommerce sellers, brands, and agencies. It connects product catalog data to social content creation, approval, scheduling, publishing, engagement, and measurable campaign outcomes.
 
 ## Current documentation set
 

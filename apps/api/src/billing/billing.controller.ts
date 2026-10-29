@@ -23,6 +23,7 @@ import {
 } from './billing.service';
 import { CreateCheckoutDto } from './dto/create-checkout.dto';
 import { CancelSubscriptionDto } from './dto/cancel-subscription.dto';
+import { ActivatePlanDto } from './dto/activate-plan.dto';
 import type { PlanEntitlements } from './billing-plans';
 
 @ApiTags('Billing & Subscriptions')
@@ -86,16 +87,17 @@ export class BillingController {
   @Post('activate')
   @HttpCode(HttpStatus.OK)
   @Roles(WorkspaceRole.OWNER, WorkspaceRole.ADMIN)
-  @ApiOperation({ summary: 'Activate plan subscription (OWNER/ADMIN only)' })
+  @ApiOperation({ summary: 'Confirm webhook-verified payment and activate plan (OWNER/ADMIN only)' })
   @ApiParam({ name: 'workspaceId', description: '24-character hex MongoDB ObjectId' })
-  @ApiResponse({ status: 200, description: 'Subscription activated' })
+  @ApiResponse({ status: 200, description: 'Subscription activated after verified payment' })
+  @ApiResponse({ status: 409, description: 'Payment not yet confirmed by Razorpay webhook' })
   async activate(
     @Param('workspaceId') workspaceId: string,
-    @Body('planId') planId: string,
+    @Body() dto: ActivatePlanDto,
     @CurrentUser() user: AuthenticatedUser,
     @Ip() ip?: string,
   ): Promise<Subscription> {
-    return this.billingService.activatePlan(workspaceId, planId, user.id, ip);
+    return this.billingService.confirmActivation(workspaceId, dto.orderId, user.id, ip);
   }
 
   @Post('cancel')

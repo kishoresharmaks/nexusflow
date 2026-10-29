@@ -30,6 +30,39 @@ export class AnalyticsController {
     return this.analyticsService.getTimeseries(workspaceId, isNaN(parsedDays) ? 30 : parsedDays);
   }
 
+  @Get('campaigns')
+  async getCampaigns(@Param('workspaceId') workspaceId: string, @Query('days') days?: string) {
+    const parsedDays = days ? parseInt(days, 10) : 30;
+    return this.analyticsService.getCampaigns(workspaceId, isNaN(parsedDays) ? 30 : parsedDays);
+  }
+
+  @Get('channels')
+  async getChannels(@Param('workspaceId') workspaceId: string, @Query('days') days?: string) {
+    const parsedDays = days ? parseInt(days, 10) : 30;
+    return this.analyticsService.getChannels(workspaceId, isNaN(parsedDays) ? 30 : parsedDays);
+  }
+
+  @Get('products')
+  async getProducts(@Param('workspaceId') workspaceId: string, @Query('days') days?: string) {
+    const parsedDays = days ? parseInt(days, 10) : 30;
+    return this.analyticsService.getProducts(workspaceId, isNaN(parsedDays) ? 30 : parsedDays);
+  }
+
+  @Get('conversions')
+  async getRecentConversions(
+    @Param('workspaceId') workspaceId: string,
+    @Query('days') days?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsedDays = days ? parseInt(days, 10) : 30;
+    const parsedLimit = limit ? parseInt(limit, 10) : 10;
+    return this.analyticsService.getRecentConversions(
+      workspaceId,
+      isNaN(parsedDays) ? 30 : parsedDays,
+      isNaN(parsedLimit) ? 10 : parsedLimit,
+    );
+  }
+
   @Get('best-times')
   async getBestTimes(@Param('workspaceId') workspaceId: string) {
     return this.analyticsService.getBestTimes(workspaceId);

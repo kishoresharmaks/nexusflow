@@ -127,7 +127,7 @@ describe('E2E Instagram OAuth 2.0 Integration & Publishing Flow', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { authUrl: string; state: string; expiresInSeconds: number };
 
-    expect(body.authUrl).toContain('https://www.facebook.com/v19.0/dialog/oauth');
+    expect(body.authUrl).toMatch(/https:\/\/www\.facebook\.com\/v\d+\.\d+\/dialog\/oauth/);
     expect(body.authUrl).toContain('response_type=code');
     expect(body.authUrl).toContain('instagram_basic');
     expect(body.authUrl).toContain('instagram_content_publish');
@@ -146,7 +146,7 @@ describe('E2E Instagram OAuth 2.0 Integration & Publishing Flow', () => {
 
     expect(res.status).toBe(302);
     const location = res.headers.get('location');
-    expect(location).toContain('https://www.facebook.com/v19.0/dialog/oauth');
+    expect(location).toMatch(/https:\/\/www\.facebook\.com\/v\d+\.\d+\/dialog\/oauth/);
     expect(location).toContain('response_type=code');
   });
 

@@ -42,19 +42,38 @@ export class WebhooksController {
   @ApiResponse({ status: 200, description: 'Razorpay webhook acknowledged' })
   @ApiResponse({ status: 401, description: 'Invalid Razorpay signature' })
   async handleRazorpayWebhook(
-    @Body() body: Record<string, unknown>,
+    @Req() req: Request & { rawBody?: Buffer },
     @Headers('x-razorpay-signature') signature: string | undefined,
+  ): Promise<WebhookProcessingResult> {
+    const rawBody = req.rawBody
+      ? req.rawBody.toString('utf8')
+      : typeof req.body === 'string'
+        ? req.body
+        : JSON.stringify(req.body ?? {});
+
+    return this.webhooksService.processRazorpayPaymentWebhook(rawBody, signature);
+  }
+
+  @Post('shopify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Receive Shopify order webhooks with HMAC-SHA256 signature verification',
+  })
+  @ApiResponse({ status: 200, description: 'Shopify order webhook acknowledged and attributed' })
+  @ApiResponse({ status: 401, description: 'Invalid Shopify HMAC signature' })
+  async handleShopifyWebhook(
+    @Body() body: Record<string, unknown>,
+    @Headers('x-shopify-hmac-sha256') signature: string | undefined,
+    @Headers('x-shopify-shop-domain') shopDomain: string | undefined,
+    @Headers('x-shopify-topic') topic: string | undefined,
     @Req() req: Request,
   ): Promise<WebhookProcessingResult> {
-    const eventId = (body['event_id'] as string) || (body['id'] as string) || `rzp_${Date.now()}`;
-    const eventType = (body['event'] as string) || 'payment.authorized';
     const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(body);
 
-    return this.webhooksService.processBillingWebhook(
-      'razorpay',
-      eventId,
-      eventType,
-      (body['payload'] as Record<string, unknown>) || body,
+    return this.webhooksService.processShopifyOrderWebhook(
+      topic || 'orders/paid',
+      shopDomain || '',
+      body,
       rawBody,
       signature,
     );

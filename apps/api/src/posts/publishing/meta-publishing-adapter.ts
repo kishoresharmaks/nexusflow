@@ -5,12 +5,18 @@ import {
   PublishPayload,
   PublishResult,
 } from './publishing-adapter.interface';
+import {
+  DEFAULT_META_GRAPH_API_VERSION,
+  publishInstagramFeedPost,
+  type InstagramGraphResult,
+} from '../../integrations/instagram/instagram-graph.client';
 
 @Injectable()
 export class MetaPublishingAdapter implements SocialPublishingAdapter {
   readonly provider = SocialProvider.META_INSTAGRAM;
   private readonly logger = new Logger(MetaPublishingAdapter.name);
-  private readonly graphApiVersion = 'v19.0';
+  private readonly graphApiVersion =
+    process.env['META_GRAPH_API_VERSION'] || DEFAULT_META_GRAPH_API_VERSION;
 
   async publish(
     account: {
@@ -23,7 +29,6 @@ export class MetaPublishingAdapter implements SocialPublishingAdapter {
   ): Promise<PublishResult> {
     const isInstagram = account.provider === SocialProvider.META_INSTAGRAM;
 
-    // 1. Validate platform constraints
     if (isInstagram && payload.mediaUrls.length === 0) {
       return {
         success: false,
@@ -42,7 +47,7 @@ export class MetaPublishingAdapter implements SocialPublishingAdapter {
       };
     }
 
-    const hashtagMatches = payload.content.match(/#[a-zA-Z0-9_]+/g);
+    const hashtagMatches = payload.content.match(/#[\p{L}\p{N}_]+/gu);
     if (hashtagMatches && hashtagMatches.length > 30) {
       return {
         success: false,
@@ -52,111 +57,61 @@ export class MetaPublishingAdapter implements SocialPublishingAdapter {
       };
     }
 
-    // 2. In test/dev environment or simulated test accounts:
-    if (
-      process.env['NODE_ENV'] === 'test' ||
-      accessToken.startsWith('mock-') ||
-      accessToken.startsWith('test-') ||
-      account.providerAccountId.startsWith('test-') ||
-      account.providerAccountId.startsWith('mock-')
-    ) {
-      const mockPostId = `${isInstagram ? 'ig' : 'fb'}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    // Test runtime only — never fabricate provider post IDs in production.
+    if (process.env['NODE_ENV'] === 'test') {
+      const mockPostId = `${isInstagram ? 'ig' : 'fb'}_test_${Date.now()}`;
       return {
         success: true,
         providerPostId: mockPostId,
-        providerRequestId: `meta_req_${Date.now()}`,
+        providerRequestId: `meta_test_req_${Date.now()}`,
         isTransient: false,
       };
     }
 
-    // 3. Official Meta Graph API call
     try {
       if (isInstagram) {
-        return await this.publishToInstagram(account.providerAccountId, payload, accessToken);
-      } else {
-        return await this.publishToFacebook(account.providerAccountId, payload, accessToken);
+        const graphResult = await publishInstagramFeedPost({
+          igUserId: account.providerAccountId,
+          accessToken,
+          caption: payload.content,
+          mediaUrls: payload.mediaUrls,
+          graphApiVersion: this.graphApiVersion,
+        });
+        return this.mapInstagramResult(graphResult);
       }
+      return await this.publishToFacebook(account.providerAccountId, payload, accessToken);
     } catch (networkError) {
       this.logger.warn(
         `Network timeout/failure contacting Meta Graph API: ${(networkError as Error).message}`,
       );
       return {
         success: false,
-        errorCode: 'NETWORK_TIMEOUT',
+        errorCode: 'AMBIGUOUS_PUBLISH_OUTCOME',
         errorMessage: 'Ambiguous outcome: network error contacting Meta Graph API.',
-        isTransient: true,
-        retryAfterSeconds: 60,
+        isTransient: false,
       };
     }
   }
 
-  /**
-   * Official Instagram 2-step container publication flow:
-   * Step 1: Create media container (POST /{ig-user-id}/media)
-   * Step 2: Publish media container (POST /{ig-user-id}/media_publish)
-   */
-  private async publishToInstagram(
-    igUserId: string,
-    payload: PublishPayload,
-    accessToken: string,
-  ): Promise<PublishResult> {
-    const isVideo = payload.mediaUrls[0]?.match(/\.(mp4|mov)(\?.*)?$/i);
-    const containerEndpoint = `https://graph.facebook.com/${this.graphApiVersion}/${igUserId}/media`;
-
-    const containerBody: Record<string, string> = {
-      access_token: accessToken,
-      caption: payload.content,
-    };
-
-    if (isVideo) {
-      containerBody['media_type'] = 'VIDEO';
-      containerBody['video_url'] = payload.mediaUrls[0]!;
-    } else {
-      containerBody['image_url'] = payload.mediaUrls[0]!;
+  private mapInstagramResult(result: InstagramGraphResult): PublishResult {
+    if (result.success) {
+      return {
+        success: true,
+        providerPostId: result.providerPostId,
+        ...(result.providerRequestId ? { providerRequestId: result.providerRequestId } : {}),
+        isTransient: false,
+      };
     }
 
-    const containerRes = await fetch(containerEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(containerBody),
-    });
-
-    const containerData = (await containerRes.json()) as {
-      id?: string;
-      error?: { code: number; message: string; subcode?: number };
-    };
-
-    if (!containerRes.ok || !containerData.id || containerData.error) {
-      return this.classifyMetaError(containerRes.status, containerData.error);
-    }
-
-    const creationId = containerData.id;
-
-    // Step 2: Publish container
-    const publishEndpoint = `https://graph.facebook.com/${this.graphApiVersion}/${igUserId}/media_publish`;
-    const publishRes = await fetch(publishEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        creation_id: creationId,
-        access_token: accessToken,
-      }),
-    });
-
-    const publishData = (await publishRes.json()) as {
-      id?: string;
-      error?: { code: number; message: string; subcode?: number };
-    };
-
-    if (!publishRes.ok || !publishData.id || publishData.error) {
-      return this.classifyMetaError(publishRes.status, publishData.error);
-    }
-
+    const isTransient = result.ambiguous ? false : result.isTransient;
     return {
-      success: true,
-      providerPostId: publishData.id,
-      providerRequestId: publishRes.headers.get('x-fb-request-id') ?? `meta_req_${Date.now()}`,
-      isTransient: false,
+      success: false,
+      errorCode: result.errorCode,
+      errorMessage: result.errorMessage,
+      isTransient,
+      ...(isTransient && result.retryAfterSeconds !== undefined
+        ? { retryAfterSeconds: result.retryAfterSeconds }
+        : {}),
     };
   }
 
@@ -174,35 +129,44 @@ export class MetaPublishingAdapter implements SocialPublishingAdapter {
       ? `https://graph.facebook.com/${this.graphApiVersion}/${pageId}/photos`
       : `https://graph.facebook.com/${this.graphApiVersion}/${pageId}/feed`;
 
-    const body: Record<string, string> = {
+    const body = new URLSearchParams({
       access_token: accessToken,
       ...(hasMedia
         ? { url: payload.mediaUrls[0]!, caption: payload.content }
         : { message: payload.content }),
-    };
-
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
     });
 
-    const data = (await res.json()) as {
-      id?: string;
-      post_id?: string;
-      error?: { code: number; message: string; subcode?: number };
-    };
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
 
-    if (!res.ok || (!data.id && !data.post_id) || data.error) {
-      return this.classifyMetaError(res.status, data.error);
+      const data = (await res.json()) as {
+        id?: string;
+        post_id?: string;
+        error?: { code: number; message: string; subcode?: number };
+      };
+
+      if (!res.ok || (!data.id && !data.post_id) || data.error) {
+        return this.classifyMetaError(res.status, data.error);
+      }
+
+      return {
+        success: true,
+        providerPostId: data.post_id || data.id,
+        providerRequestId: res.headers.get('x-fb-request-id') ?? undefined,
+        isTransient: false,
+      };
+    } catch (networkError) {
+      return {
+        success: false,
+        errorCode: 'AMBIGUOUS_PUBLISH_OUTCOME',
+        errorMessage: (networkError as Error).message || 'Ambiguous Facebook publish outcome.',
+        isTransient: false,
+      };
     }
-
-    return {
-      success: true,
-      providerPostId: data.post_id || data.id,
-      providerRequestId: res.headers.get('x-fb-request-id') ?? `meta_req_${Date.now()}`,
-      isTransient: false,
-    };
   }
 
   private classifyMetaError(
@@ -212,11 +176,9 @@ export class MetaPublishingAdapter implements SocialPublishingAdapter {
     const errCode = error?.code ?? httpStatus;
     const errMsg = error?.message ?? `Meta API request failed with HTTP ${httpStatus}`;
 
-    // Rate limits (4, 17, 32) or Server 5xx (2, 500+)
     const isRateLimit = errCode === 4 || errCode === 17 || errCode === 32;
     const isServer5xx = errCode === 2 || httpStatus >= 500;
     const isTransient = isRateLimit || isServer5xx;
-
     const retryAfterSeconds = isRateLimit ? 300 : isTransient ? 60 : undefined;
 
     return {

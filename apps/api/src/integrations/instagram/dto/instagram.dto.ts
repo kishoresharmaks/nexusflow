@@ -6,6 +6,7 @@ import {
   IsArray,
   Matches,
   ArrayMinSize,
+  ArrayMaxSize,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -23,13 +24,6 @@ export class InstagramConnectQueryDto {
   @IsOptional()
   @IsString()
   token?: string;
-
-  @ApiPropertyOptional({
-    description: 'Optional OAuth callback URL override',
-  })
-  @IsOptional()
-  @IsString()
-  redirectUri?: string;
 
   @ApiPropertyOptional({
     description: 'Set to true or 1 to return JSON payload instead of redirecting',
@@ -114,6 +108,11 @@ export class InstagramPostDto {
   })
   @IsArray({ message: 'mediaUrls must be an array' })
   @ArrayMinSize(1, { message: 'Instagram requires at least one image or video media URL to publish' })
+  @ArrayMaxSize(10, { message: 'Instagram carousels support at most 10 media items' })
   @IsString({ each: true, message: 'Each media URL must be a valid string' })
+  @Matches(/^https:\/\/[^\s]+$/i, {
+    each: true,
+    message: 'Each media URL must be a public HTTPS URL that Meta can fetch',
+  })
   mediaUrls!: string[];
 }

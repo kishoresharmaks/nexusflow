@@ -4,6 +4,7 @@ import { PrismaService } from '../../database/prisma.service';
 import { AuditService } from '../../audit/audit.service';
 import { encryptToken, decryptToken } from '../../social/crypto.util';
 import { StoreAdapterFactory } from './store-adapter.factory';
+import { SyncedProductData } from './store-adapter.interface';
 import { ConnectStoreDto } from './dto/connect-store.dto';
 
 export interface MaskedStoreConnection {
@@ -215,6 +216,7 @@ export class StoreConnectionsService {
           await this.prisma.product.update({
             where: { id: existing.id },
             data: {
+              sku: p.sku ? p.sku.trim() : (existing.sku || null),
               title: p.title,
               ...(p.description !== undefined ? { description: p.description } : {}),
               priceCents: p.priceCents,
@@ -231,7 +233,7 @@ export class StoreConnectionsService {
           await this.prisma.product.create({
             data: {
               workspaceId,
-              ...(p.sku ? { sku: p.sku } : {}),
+              sku: p.sku ? p.sku.trim() : null,
               title: p.title,
               ...(p.description ? { description: p.description } : {}),
               priceCents: p.priceCents,
@@ -259,6 +261,34 @@ export class StoreConnectionsService {
           errorMessage: null,
         },
       });
+
+      // Auto-align workspace default currency if products have a consistent currency and workspace is on default USD
+      const firstProductCurrency = products[0]?.currency;
+      if (firstProductCurrency && firstProductCurrency !== 'USD') {
+        try {
+          const ws = await this.prisma.workspace.findUnique({
+            where: { id: workspaceId },
+            select: { currency: true, locale: true },
+          });
+          if (ws && ws.currency === 'USD') {
+            const newLocale =
+              firstProductCurrency === 'INR'
+                ? 'en-IN'
+                : firstProductCurrency === 'GBP'
+                ? 'en-GB'
+                : ws.locale;
+            await this.prisma.workspace.update({
+              where: { id: workspaceId },
+              data: { currency: firstProductCurrency, locale: newLocale },
+            });
+            this.logger.log(
+              `Auto-aligned workspace ${workspaceId} default currency to ${firstProductCurrency} (${newLocale}) from synced catalog`,
+            );
+          }
+        } catch (err) {
+          this.logger.warn(`Could not auto-align workspace currency: ${(err as Error).message}`);
+        }
+      }
 
       if (userId) {
         await this.auditService.record({
@@ -321,5 +351,87 @@ export class StoreConnectionsService {
       createdAt: conn.createdAt,
       updatedAt: conn.updatedAt,
     };
+  }
+
+  /**
+   * Refreshes a single product directly from its source store (e.g. Shopify, WooCommerce).
+   * Queries the store API for live SKU, price, inventory quantity, and metadata.
+   */
+  async refreshProductFromStore(workspaceId: string, productId: string) {
+    const product = await this.prisma.product.findFirst({
+      where: { id: productId, workspaceId },
+    });
+
+    if (!product || !product.source || !product.sourceId) {
+      return null;
+    }
+
+    // Look for active store connection matching product's platform
+    const connection = await this.prisma.storeConnection.findFirst({
+      where: {
+        workspaceId,
+        platform: product.source as StorePlatform,
+      },
+    });
+
+    if (!connection) {
+      return null;
+    }
+
+    try {
+      const adapter = this.adapterFactory.getAdapter(connection.platform);
+      const decryptedApiKey = decryptToken(connection.encryptedApiKey);
+      const decryptedSecret = connection.encryptedSecret
+        ? decryptToken(connection.encryptedSecret)
+        : undefined;
+
+      const credentials = {
+        platform: connection.platform,
+        storeUrl: connection.storeUrl,
+        apiKey: decryptedApiKey,
+        ...(decryptedSecret ? { apiSecret: decryptedSecret } : {}),
+        ...(connection.apiVersion ? { apiVersion: connection.apiVersion } : {}),
+      };
+
+      let freshData: SyncedProductData | null = null;
+      if (typeof adapter.fetchProduct === 'function') {
+        freshData = await adapter.fetchProduct(credentials, product.sourceId);
+      }
+
+      if (!freshData) {
+        // Fallback: query product batch and locate product
+        const batch = await adapter.fetchProducts(credentials, 250);
+        freshData = batch.find((p) => p.sourceId === product.sourceId) || null;
+      }
+
+      if (!freshData) {
+        return null;
+      }
+
+      const now = new Date();
+      const updated = await this.prisma.product.update({
+        where: { id: productId },
+        data: {
+          sku: freshData.sku ? freshData.sku.trim() : (freshData.sku === '' ? null : product.sku),
+          title: freshData.title,
+          ...(freshData.description !== undefined ? { description: freshData.description } : {}),
+          priceCents: freshData.priceCents,
+          currency: freshData.currency,
+          inventoryCount: freshData.inventoryCount,
+          ...(freshData.url !== undefined ? { url: freshData.url } : {}),
+          images: freshData.images,
+          tags: freshData.tags,
+          freshnessCheckedAt: now,
+          isActive: true,
+        },
+      });
+
+      return updated;
+    } catch (err) {
+      this.logger.warn(
+        `Failed to refresh product ${productId} from store: ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WebhooksService } from '../src/webhooks/webhooks.service';
 import crypto from 'crypto';
+import { SubscriptionStatus, BillingOrderStatus } from '@commercepilot/database';
 import type { PrismaService } from '../src/database/prisma.service';
 import type { ConfigService } from '@nestjs/config';
 
@@ -25,9 +26,17 @@ describe('WebhooksService', () => {
         findFirst: vi.fn(),
         upsert: vi.fn(),
         update: vi.fn(),
+        create: vi.fn(),
       },
       billingEvent: {
         create: vi.fn(),
+      },
+      billingOrder: {
+        findUnique: vi.fn(),
+        update: vi.fn(),
+      },
+      workspace: {
+        update: vi.fn(),
       },
     };
 
@@ -91,12 +100,16 @@ describe('WebhooksService', () => {
         processed: true,
       });
 
+      const raw = JSON.stringify({ event: 'subscription.charged', amount: 2900 });
+      const sig = crypto.createHmac('sha256', testSecret).update(raw, 'utf8').digest('hex');
+
       const result = await service.processBillingWebhook(
         'razorpay',
         'evt_dup_999',
         'subscription.charged',
         { amount: 2900 },
-        'raw-body',
+        raw,
+        sig,
       );
 
       expect(result.status).toBe('already_processed');
@@ -148,6 +161,97 @@ describe('WebhooksService', () => {
           data: expect.objectContaining({ processed: true }),
         }),
       );
+    });
+  });
+
+  describe('processRazorpayPaymentWebhook', () => {
+    const razorpayPayload = (event: string, entity: Record<string, unknown>) => ({
+      entity: 'event',
+      event,
+      payload: {
+        payment: { entity },
+      },
+    });
+
+    it('rejects an invalid signature with UnauthorizedException', async () => {
+      const raw = JSON.stringify(razorpayPayload('payment.captured', { id: 'pay_1', order_id: 'order_1' }));
+      await expect(
+        service.processRazorpayPaymentWebhook(raw, 'deadbeef-invalid-sig'),
+      ).rejects.toThrow('Invalid Razorpay webhook HMAC-SHA256 signature.');
+    });
+
+    it('activates the subscription and marks the order PAID on verified payment.captured', async () => {
+      const payload = razorpayPayload('payment.captured', {
+        id: 'pay_abc123',
+        amount: 7900,
+        currency: 'USD',
+        order_id: 'order_real_123',
+        status: 'captured',
+      });
+      const raw = JSON.stringify(payload);
+      const sig = crypto.createHmac('sha256', testSecret).update(raw, 'utf8').digest('hex');
+
+      mockPrisma.webhookEvent.findUnique.mockResolvedValue(null);
+      mockPrisma.webhookEvent.create.mockResolvedValue({ id: 'wh-razorpay-1' });
+      mockPrisma.webhookEvent.update.mockResolvedValue({ id: 'wh-razorpay-1', processed: true });
+      mockPrisma.billingOrder.findUnique.mockResolvedValue({
+        id: 'bo-1',
+        workspaceId: validWorkspaceId,
+        planId: 'GROWTH',
+        razorpayOrderId: 'order_real_123',
+      });
+      mockPrisma.subscription.findFirst.mockResolvedValue({
+        id: 'sub-1',
+        workspaceId: validWorkspaceId,
+      });
+      mockPrisma.subscription.update.mockResolvedValue({ id: 'sub-1' });
+      mockPrisma.workspace.update.mockResolvedValue({ id: validWorkspaceId });
+      mockPrisma.billingEvent.create.mockResolvedValue({ id: 'be-1' });
+
+      const result = await service.processRazorpayPaymentWebhook(raw, sig);
+
+      expect(result.status).toBe('processed');
+      expect(mockPrisma.billingOrder.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'bo-1' },
+          data: expect.objectContaining({
+            status: BillingOrderStatus.PAID,
+            providerPaymentId: 'pay_abc123',
+          }),
+        }),
+      );
+      expect(mockPrisma.subscription.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'sub-1' },
+          data: expect.objectContaining({ planId: 'GROWTH', status: SubscriptionStatus.ACTIVE }),
+        }),
+      );
+      expect(mockPrisma.billingEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            providerPaymentId: 'pay_abc123',
+            eventType: 'payment.captured',
+          }),
+        }),
+      );
+    });
+
+    it('returns already_processed for a duplicate webhook event id', async () => {
+      mockPrisma.webhookEvent.findUnique.mockResolvedValue({
+        id: 'wh-razorpay-existing',
+        provider: 'razorpay',
+        providerEventId: 'pay_dup_1',
+        processed: true,
+      });
+
+      const payload = razorpayPayload('payment.captured', { id: 'pay_dup_1', order_id: 'order_1' });
+      const raw = JSON.stringify(payload);
+      const sig = crypto.createHmac('sha256', testSecret).update(raw, 'utf8').digest('hex');
+
+      const result = await service.processRazorpayPaymentWebhook(raw, sig);
+
+      expect(result.status).toBe('already_processed');
+      expect(mockPrisma.billingOrder.update).not.toHaveBeenCalled();
     });
   });
 });

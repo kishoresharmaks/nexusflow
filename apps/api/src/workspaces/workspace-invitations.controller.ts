@@ -36,6 +36,20 @@ export class WorkspaceInvitationsController {
     return this.workspacesService.revokeInvitation(workspaceId, invitationId, user.id, ip);
   }
 
+  @Post('workspaces/:workspaceId/invitations/:invitationId/resend')
+  @UseGuards(AuthGuard, WorkspaceGuard, RolesGuard)
+  @Roles(WorkspaceRole.OWNER, WorkspaceRole.ADMIN)
+  @ApiOperation({ summary: 'Resend an active workspace invitation and refresh expiration' })
+  resendInvitation(
+    @Param('workspaceId') workspaceId: string,
+    @Param('invitationId') invitationId: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.ip;
+    return this.workspacesService.resendInvitation(workspaceId, invitationId, user.id, ip);
+  }
+
   @Post('invitations/:token/accept')
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: 'Accept an invitation using the signed-in invited email address' })

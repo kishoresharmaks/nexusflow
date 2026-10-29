@@ -32,7 +32,8 @@ export class SocialService {
   private readonly metaAppId: string | undefined;
   private readonly metaAppSecret: string | undefined;
   private readonly metaRedirectUri: string;
-  private readonly metaGraphApiVersion = 'v19.0';
+  private readonly metaGraphApiVersion =
+    process.env['META_GRAPH_API_VERSION'] || 'v21.0';
 
   private readonly metaDefaultScopes = [
     'pages_show_list',
@@ -50,12 +51,19 @@ export class SocialService {
     private readonly configService?: ConfigService,
   ) {
     this.metaAppId =
-      this.configService?.get<string>('metaAppId') || process.env['META_APP_ID'];
+      this.configService?.get<string>('metaAppId') ||
+      process.env['META_APP_ID'] ||
+      process.env['META_CLIENT_ID'] ||
+      process.env['INSTAGRAM_CLIENT_ID'];
     this.metaAppSecret =
-      this.configService?.get<string>('metaAppSecret') || process.env['META_APP_SECRET'];
+      this.configService?.get<string>('metaAppSecret') ||
+      process.env['META_APP_SECRET'] ||
+      process.env['META_CLIENT_SECRET'] ||
+      process.env['INSTAGRAM_CLIENT_SECRET'];
     this.metaRedirectUri =
       this.configService?.get<string>('metaRedirectUri') ||
       process.env['META_REDIRECT_URI'] ||
+      process.env['INSTAGRAM_CALLBACK_URL'] ||
       'http://localhost:3000/settings/social/callback';
   }
 
@@ -292,12 +300,8 @@ export class SocialService {
     const clientId = this.metaAppId || process.env['META_APP_ID'];
     const clientSecret = this.metaAppSecret || process.env['META_APP_SECRET'];
 
-    // In test environment or simulated test code:
-    if (
-      process.env['NODE_ENV'] === 'test' ||
-      code.startsWith('mock-') ||
-      code.startsWith('test-')
-    ) {
+    // Test runtime only: never honor mock/test codes in production.
+    if (process.env['NODE_ENV'] === 'test') {
       const mockIg = await this.connectAccount(
         workspaceId,
         {
@@ -450,6 +454,220 @@ export class SocialService {
       expiresAt: account.tokenExpiresAt,
       provider: account.provider,
       displayName: account.displayName,
+    };
+  }
+
+  /**
+   * Refreshes all active social accounts in the workspace (or system-wide) expiring within daysThreshold.
+   */
+  async refreshExpiringTokens(
+    workspaceId?: string,
+    daysThreshold: number = 7,
+  ): Promise<{
+    scanned: number;
+    refreshed: number;
+    failed: number;
+    expired: number;
+    results: Array<{
+      id: string;
+      displayName: string;
+      provider: SocialProvider;
+      status: 'refreshed' | 'expired' | 'failed';
+      error?: string;
+    }>;
+  }> {
+    const thresholdDate = new Date(Date.now() + daysThreshold * 24 * 60 * 60 * 1000);
+    const whereClause: {
+      status: SocialAccountStatus;
+      tokenExpiresAt?: { lte: Date };
+      workspaceId?: string;
+    } = {
+      status: SocialAccountStatus.ACTIVE,
+      tokenExpiresAt: { lte: thresholdDate },
+    };
+
+    if (workspaceId) {
+      this.validateObjectId(workspaceId, 'workspace ID');
+      whereClause.workspaceId = workspaceId;
+    }
+
+    const accounts = await this.prisma.socialAccount.findMany({
+      where: whereClause,
+      orderBy: { tokenExpiresAt: 'asc' },
+    });
+
+    let refreshed = 0;
+    let failed = 0;
+    let expired = 0;
+    const results: Array<{
+      id: string;
+      displayName: string;
+      provider: SocialProvider;
+      status: 'refreshed' | 'expired' | 'failed';
+      error?: string;
+    }> = [];
+
+    const isTest =
+      process.env['NODE_ENV'] === 'test' ||
+      process.env['MOCK_SOCIAL'] === 'true';
+
+    for (const acc of accounts) {
+      try {
+        if (
+          acc.provider === SocialProvider.META_INSTAGRAM ||
+          acc.provider === SocialProvider.META_FACEBOOK
+        ) {
+          let newAccessToken = `mock_meta_refreshed_${Date.now()}`;
+          let expiresIn = 60 * 24 * 3600;
+
+          if (!isTest) {
+            const rawUserToken = acc.encryptedRefreshToken
+              ? decryptToken(acc.encryptedRefreshToken)
+              : decryptToken(acc.encryptedAccessToken);
+            const refreshUrl = new URL(
+              `https://graph.facebook.com/${this.metaGraphApiVersion}/oauth/access_token`,
+            );
+            refreshUrl.searchParams.set('grant_type', 'fb_exchange_token');
+            refreshUrl.searchParams.set('client_id', this.metaAppId || '');
+            refreshUrl.searchParams.set('client_secret', this.metaAppSecret || '');
+            refreshUrl.searchParams.set('fb_exchange_token', rawUserToken);
+
+            const res = await fetch(refreshUrl.toString());
+            if (!res.ok) {
+              const errBody = await res.text();
+              throw new Error(`Meta token exchange failed: ${errBody}`);
+            }
+            const data = (await res.json()) as { access_token: string; expires_in?: number };
+            newAccessToken = data.access_token;
+            if (data.expires_in) expiresIn = data.expires_in;
+          }
+
+          const tokenExpiresAt = new Date(Date.now() + expiresIn * 1000);
+          await this.prisma.socialAccount.update({
+            where: { id: acc.id },
+            data: {
+              encryptedAccessToken: encryptToken(newAccessToken),
+              tokenExpiresAt,
+              status: SocialAccountStatus.ACTIVE,
+            },
+          });
+
+          refreshed++;
+          results.push({
+            id: acc.id,
+            displayName: acc.displayName,
+            provider: acc.provider,
+            status: 'refreshed',
+          });
+        } else if (acc.provider === SocialProvider.LINKEDIN) {
+          if (!acc.encryptedRefreshToken && !isTest) {
+            throw new Error('Standard LinkedIn accounts require user re-authentication.');
+          }
+
+          let newAccessToken = `mock_linkedin_refreshed_${Date.now()}`;
+          let newRefreshToken = `mock_linkedin_refresh_${Date.now()}`;
+          let expiresIn = 60 * 24 * 3600;
+
+          if (!isTest && acc.encryptedRefreshToken) {
+            const currentRefreshToken = decryptToken(acc.encryptedRefreshToken);
+            const clientId = process.env['LINKEDIN_CLIENT_ID'] || '';
+            const clientSecret = process.env['LINKEDIN_CLIENT_SECRET'] || '';
+            const bodyParams = new URLSearchParams({
+              grant_type: 'refresh_token',
+              refresh_token: currentRefreshToken,
+              client_id: clientId,
+              client_secret: clientSecret,
+            });
+
+            const res = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: bodyParams.toString(),
+            });
+
+            if (!res.ok) {
+              const errBody = await res.text();
+              throw new Error(`LinkedIn token refresh failed: ${errBody}`);
+            }
+
+            const data = (await res.json()) as {
+              access_token: string;
+              expires_in: number;
+              refresh_token?: string;
+            };
+            newAccessToken = data.access_token;
+            expiresIn = data.expires_in;
+            if (data.refresh_token) newRefreshToken = data.refresh_token;
+          }
+
+          const tokenExpiresAt = new Date(Date.now() + expiresIn * 1000);
+          await this.prisma.socialAccount.update({
+            where: { id: acc.id },
+            data: {
+              encryptedAccessToken: encryptToken(newAccessToken),
+              encryptedRefreshToken: encryptToken(newRefreshToken),
+              tokenExpiresAt,
+              status: SocialAccountStatus.ACTIVE,
+            },
+          });
+
+          refreshed++;
+          results.push({
+            id: acc.id,
+            displayName: acc.displayName,
+            provider: acc.provider,
+            status: 'refreshed',
+          });
+        } else {
+          results.push({
+            id: acc.id,
+            displayName: acc.displayName,
+            provider: acc.provider,
+            status: 'failed',
+            error: 'Provider does not support programmatic refresh',
+          });
+          failed++;
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Refresh failed';
+        const isRevoked =
+          msg.includes('invalid_grant') ||
+          msg.includes('revoked') ||
+          msg.includes('expired') ||
+          msg.includes('re-authenticate');
+
+        if (isRevoked) {
+          await this.prisma.socialAccount.update({
+            where: { id: acc.id },
+            data: { status: SocialAccountStatus.EXPIRED },
+          });
+          expired++;
+          results.push({
+            id: acc.id,
+            displayName: acc.displayName,
+            provider: acc.provider,
+            status: 'expired',
+            error: msg,
+          });
+        } else {
+          failed++;
+          results.push({
+            id: acc.id,
+            displayName: acc.displayName,
+            provider: acc.provider,
+            status: 'failed',
+            error: msg,
+          });
+        }
+      }
+    }
+
+    return {
+      scanned: accounts.length,
+      refreshed,
+      failed,
+      expired,
+      results,
     };
   }
 }

@@ -25,3 +25,19 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Local Uploads & Static Cache
+apps/api/uploads/
+uploads/
+
+# Agent configuration, tools & skills
+.agents/
+.claude/
+*.skill
+SKILL.md
+skills/
+
+# Project documentation & specs (omit docs/plans)
+*.md
+!README.md
+docs/

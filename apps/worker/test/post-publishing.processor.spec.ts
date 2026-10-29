@@ -21,6 +21,10 @@ vi.mock('@commercepilot/database', async () => {
   };
 });
 
+vi.mock('../src/crypto.util', () => ({
+  decryptToken: vi.fn().mockReturnValue('decrypted-real-token'),
+}));
+
 describe('processPostPublishing', () => {
   const postId = '60b8d29f1c9d440000a11111';
   const workspaceId = '60b8d29f1c9d440000a22222';
@@ -196,5 +200,97 @@ describe('FallbackScheduler', () => {
 
     const count = await scheduler.pollDuePosts();
     expect(count).toBe(1);
+  });
+});
+
+describe('processPostPublishing — ambiguous & transient classification', () => {
+  const postId = '60b8d29f1c9d440000a11111';
+  const workspaceId = '60b8d29f1c9d440000a22222';
+
+  function realTokenPostFixture(overrides: Record<string, unknown> = {}) {
+    return {
+      id: postId,
+      workspaceId,
+      status: PostStatus.SCHEDULED,
+      content: 'Launch sale now!',
+      mediaUrls: [],
+      publishAttempts: [],
+      socialAccount: {
+        id: 'acc-fb-1',
+        provider: SocialProvider.META_FACEBOOK,
+        providerAccountId: 'fb-page-1',
+        encryptedAccessToken: 'encrypted-real-token',
+        status: 'ACTIVE',
+      },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('NODE_ENV', 'production');
+    (prisma.post.updateMany as any).mockResolvedValue({ count: 1 });
+    (prisma.post.update as any).mockImplementation((args: any) => ({
+      id: postId,
+      ...args.data,
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('marks a network-error outcome as UNKNOWN_OUTCOME and schedules reconciliation', async () => {
+    (prisma.post.findFirst as any).mockResolvedValue(realTokenPostFixture());
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('socket hang up')));
+
+    const result = await processPostPublishing({ postId, workspaceId });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe(PostStatus.UNKNOWN_OUTCOME);
+    expect(prisma.publishAttempt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        postId,
+        status: AttemptStatus.UNKNOWN,
+        errorCode: 'AMBIGUOUS_PUBLISH_OUTCOME',
+      }),
+    });
+    expect(prisma.post.update).toHaveBeenCalledWith({
+      where: { id: postId },
+      data: expect.objectContaining({
+        status: PostStatus.UNKNOWN_OUTCOME,
+        reconciliationDueAt: expect.any(Date),
+      }),
+    });
+  });
+
+  it('re-schedules (bounded retry) on a transient provider 5xx', async () => {
+    (prisma.post.findFirst as any).mockResolvedValue(realTokenPostFixture());
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: { code: 2, message: 'temporary outage' } }),
+      }),
+    );
+
+    const result = await processPostPublishing({ postId, workspaceId });
+
+    expect(result.status).toBe(PostStatus.SCHEDULED);
+    expect(prisma.publishAttempt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        status: AttemptStatus.FAILED,
+        isTransient: true,
+      }),
+    });
+    expect(prisma.post.update).toHaveBeenCalledWith({
+      where: { id: postId },
+      data: expect.objectContaining({
+        status: PostStatus.SCHEDULED,
+        scheduledAt: expect.any(Date),
+      }),
+    });
   });
 });

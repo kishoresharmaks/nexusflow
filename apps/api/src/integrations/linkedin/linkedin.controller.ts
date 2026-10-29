@@ -114,7 +114,7 @@ export class LinkedInIntegrationController {
       }
       targetWorkspaceId = primaryMembership.workspaceId;
     } else {
-      const membership = user.memberships.find((m) => m.workspaceId === targetWorkspaceId);
+      const membership = (user.memberships as any[])?.find((m: any) => m.workspaceId === targetWorkspaceId);
       if (!membership) {
         if (query.json === 'true' || query.json === '1') {
           throw new ForbiddenException('User is not a member of the target workspace.');
@@ -123,6 +123,10 @@ export class LinkedInIntegrationController {
           `${this.linkedinService.getFrontendUrl()}/social-accounts?linkedin=failed&error=forbidden_workspace`,
         );
       }
+    }
+
+    if (!targetWorkspaceId) {
+      throw new BadRequestException('Workspace ID is required.');
     }
 
     try {

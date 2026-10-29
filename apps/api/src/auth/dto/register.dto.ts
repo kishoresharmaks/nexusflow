@@ -21,4 +21,9 @@ export class RegisterDto {
   @IsString()
   @IsOptional()
   workspaceName?: string;
+
+  @ApiPropertyOptional({ description: 'Invitation token if registering via a workspace invite' })
+  @IsString()
+  @IsOptional()
+  invitationToken?: string;
 }

@@ -67,13 +67,20 @@ export class AuditService {
     workspaceId: string,
     page = 1,
     limit = 50,
+    filters?: { action?: string; resourceType?: string },
   ): Promise<PaginatedAuditLogs> {
     const skip = (page - 1) * limit;
 
-    const [total, items] = await Promise.all([
-      this.prisma.auditEvent.count({ where: { workspaceId } }),
+    const where: Prisma.AuditEventWhereInput = {
+      workspaceId,
+      ...(filters?.action ? { action: filters.action } : {}),
+      ...(filters?.resourceType ? { resourceType: filters.resourceType } : {}),
+    };
+
+    const [total, rawItems] = await Promise.all([
+      this.prisma.auditEvent.count({ where }),
       this.prisma.auditEvent.findMany({
-        where: { workspaceId },
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -85,6 +92,11 @@ export class AuditService {
       }),
     ]);
 
+    const items = rawItems.map((item) => ({
+      ...item,
+      metadata: this.redactAuditMetadata(item.metadata),
+    }));
+
     return {
       items,
       meta: {
@@ -94,5 +106,33 @@ export class AuditService {
         totalPages: Math.ceil(total / limit) || 1,
       },
     };
+  }
+
+  private redactAuditMetadata(metadata: unknown): unknown {
+    if (!metadata || typeof metadata !== 'object') return metadata;
+    const sensitiveKeys = [
+      'password',
+      'token',
+      'secret',
+      'accessToken',
+      'refreshToken',
+      'tokenHash',
+      'rawToken',
+      'authorizationCode',
+      'cookie',
+      'signature',
+      'apiKey',
+    ];
+    const sanitized: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(metadata as Record<string, unknown>)) {
+      if (sensitiveKeys.some((sk) => k.toLowerCase().includes(sk.toLowerCase()))) {
+        sanitized[k] = '[REDACTED]';
+      } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+        sanitized[k] = this.redactAuditMetadata(v);
+      } else {
+        sanitized[k] = v;
+      }
+    }
+    return sanitized;
   }
 }

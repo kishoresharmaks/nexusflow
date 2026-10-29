@@ -15,6 +15,7 @@ describe('Airtight Authentication & Authorization Enforcement Suite', () => {
   let validWorkspaceId: string;
   let foreignUserToken: string;
   let foreignWorkspaceId: string;
+  let originalPublicRegSetting: any;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -42,6 +43,15 @@ describe('Airtight Authentication & Authorization Enforcement Suite', () => {
     baseUrl = `http://127.0.0.1:${port}/api/v1`;
 
     prisma = app.get<PrismaService>(PrismaService);
+
+    originalPublicRegSetting = await prisma.platformSetting.findUnique({
+      where: { key: 'allow_public_registrations' },
+    });
+    await prisma.platformSetting.upsert({
+      where: { key: 'allow_public_registrations' },
+      update: { value: { enabled: true } },
+      create: { key: 'allow_public_registrations', value: { enabled: true }, isPublic: true },
+    });
 
     // Register User 1
     const u1Email = `authtest_u1_${Date.now()}@commercepilot.test`;
@@ -95,10 +105,44 @@ describe('Airtight Authentication & Authorization Enforcement Suite', () => {
   });
 
   afterAll(async () => {
+    if (originalPublicRegSetting) {
+      await prisma.platformSetting.update({
+        where: { key: 'allow_public_registrations' },
+        data: { value: originalPublicRegSetting.value },
+      });
+    }
     await app.close();
   });
 
   describe('1. Unauthenticated Requests (Missing Bearer Token)', () => {
+    it('rejects POST /auth/register with 403 Forbidden when allow_public_registrations is disabled', async () => {
+      await prisma.platformSetting.update({
+        where: { key: 'allow_public_registrations' },
+        data: { value: { enabled: false } },
+      });
+
+      const res = await fetch(`${baseUrl}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Restricted Self-Register User',
+          email: 'restricted_signup@commercepilot.test',
+          password: 'Password123!',
+        }),
+      });
+
+      expect(res.status).toBe(403);
+      const json = await res.json();
+      const msg = json.error?.message || json.message;
+      expect(msg).toContain('Public registration is currently disabled');
+
+      // Re-enable for the remainder of this test suite
+      await prisma.platformSetting.update({
+        where: { key: 'allow_public_registrations' },
+        data: { value: { enabled: true } },
+      });
+    });
+
     it('rejects GET /auth/me with 401 Unauthorized', async () => {
       const res = await fetch(`${baseUrl}/auth/me`);
       expect(res.status).toBe(401);

@@ -21,6 +21,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
@@ -29,7 +30,20 @@ async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
+    bodyParser: false,
   });
+
+  // Capture the exact raw request bytes so provider webhook HMAC signatures can
+  // be verified against the original payload (never a re-serialized object).
+  app.use(
+    express.json({
+      limit: '1mb',
+      verify: (req: Request, _res: Response, buf: Buffer) => {
+        (req as Request & { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
+  app.use(express.urlencoded({ extended: true }));
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('port', 4000);
@@ -62,13 +76,21 @@ async function bootstrap(): Promise<void> {
 
   app.useGlobalFilters(new AllExceptionsFilter());
   app.setGlobalPrefix('api/v1', {
-    exclude: ['health', 'ready', 'api/v1/health', 'api/v1/ready', 'api/integrations/(.*)'],
+    exclude: [
+      'health',
+      'ready',
+      'api/v1/health',
+      'api/v1/ready',
+      'api/integrations/{*path}',
+      't/{*path}',
+      'api/v1/t/{*path}',
+    ],
   });
   app.enableShutdownHooks();
 
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('CommercePilot API')
-    .setDescription('CommercePilot REST API documentation')
+    .setTitle('NexusFlow API')
+    .setDescription('NexusFlow REST API documentation')
     .setVersion('0.1.0')
     .addBearerAuth()
     .addTag('Health')

@@ -10,6 +10,7 @@ describe('E2E Store Integrations, Campaigns, Attribution, and Analytics Flow', (
   let app: INestApplication;
   let prisma: PrismaService;
   let baseUrl: string;
+  let rootUrl: string;
 
   let tenant1Token: string;
   let tenant1WorkspaceId: string;
@@ -35,7 +36,15 @@ describe('E2E Store Integrations, Campaigns, Attribution, and Analytics Flow', (
     );
     app.useGlobalFilters(new AllExceptionsFilter());
     app.setGlobalPrefix('api/v1', {
-      exclude: ['health', 'ready', 'api/v1/health', 'api/v1/ready'],
+      exclude: [
+        'health',
+        'ready',
+        'api/v1/health',
+        'api/v1/ready',
+        'api/integrations/(.*)',
+        't/(.*)',
+        'api/v1/t/(.*)',
+      ],
     });
 
     await app.init();
@@ -43,6 +52,7 @@ describe('E2E Store Integrations, Campaigns, Attribution, and Analytics Flow', (
 
     const address = app.getHttpServer().address();
     const port = typeof address === 'object' && address ? address.port : 0;
+    rootUrl = `http://127.0.0.1:${port}`;
     baseUrl = `http://127.0.0.1:${port}/api/v1`;
 
     prisma = app.get<PrismaService>(PrismaService);
@@ -276,6 +286,65 @@ describe('E2E Store Integrations, Campaigns, Attribution, and Analytics Flow', (
     const convBody = (await convRes.json()) as { id: string; orderTotalCents: number };
     expect(convBody.id).toBeDefined();
     expect(convBody.orderTotalCents).toBe(6998);
+  });
+
+  it('5b. Generates public tracking link and validates HTTP 302 redirects on /api/v1/t/:code and /t/:code', async () => {
+    // 1. Create Tracking Link
+    const createRes = await fetch(
+      `${baseUrl}/workspaces/${tenant1WorkspaceId}/tracking/links`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tenant1Token}`,
+        },
+        body: JSON.stringify({
+          destinationUrl: 'https://myshop.com/products/hoodie?color=navy',
+          utmSource: 'newsletter',
+          utmMedium: 'bio_link',
+          utmCampaign: 'spring-relaunch-2026',
+          campaignId: createdCampaignId,
+        }),
+      },
+    );
+
+    expect(createRes.status).toBe(201);
+    const link = (await createRes.json()) as {
+      id: string;
+      shortCode: string;
+      shortUrl: string;
+    };
+    expect(link.shortCode).toHaveLength(8);
+
+    // 2. Test GET /api/v1/t/:code redirect
+    const apiRedirectRes = await fetch(`${rootUrl}/api/v1/t/${link.shortCode}`, {
+      method: 'GET',
+      redirect: 'manual',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
+    expect(apiRedirectRes.status).toBe(302);
+    const apiTarget = apiRedirectRes.headers.get('location');
+    expect(apiTarget).toBeDefined();
+    expect(apiTarget).toContain('https://myshop.com/products/hoodie?');
+    expect(apiTarget).toContain('utm_source=newsletter');
+    expect(apiTarget).toContain('utm_medium=bio_link');
+    expect(apiTarget).toContain('utm_campaign=spring-relaunch-2026');
+    expect(apiTarget).toContain('cp_click_id=');
+
+    // 3. Test GET /t/:code redirect
+    const rootRedirectRes = await fetch(`${rootUrl}/t/${link.shortCode}`, {
+      method: 'GET',
+      redirect: 'manual',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
+      },
+    });
+    expect(rootRedirectRes.status).toBe(302);
+    const rootTarget = rootRedirectRes.headers.get('location');
+    expect(rootTarget).toBeDefined();
+    expect(rootTarget).toContain('cp_click_id=');
   });
 
   it('6. Computes aggregated analytics overview, timeseries, and best times', async () => {

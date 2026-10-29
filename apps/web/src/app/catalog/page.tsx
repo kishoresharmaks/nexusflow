@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../context/auth-context';
 import { api, type ProductItem, type CatalogImportRecord } from '../../lib/api';
 import { ProtectedRoute } from '../../components/protected-route';
+import { formatCurrency } from '../../lib/formatters';
 import {
   Upload,
   Plus,
@@ -40,6 +41,7 @@ export default function CatalogPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isLiveConnected, setIsLiveConnected] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [refreshingProductId, setRefreshingProductId] = useState<string | null>(null);
 
   // Background import jobs state
   const [importHistory, setImportHistory] = useState<CatalogImportRecord[]>([]);
@@ -63,7 +65,14 @@ export default function CatalogPage() {
   const [newInventory, setNewInventory] = useState('10');
   const [isSaving, setIsSaving] = useState(false);
 
-  // Fetch products from backend API
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const fetchProducts = useCallback(async () => {
     if (!currentWorkspace?.id || !token) return;
     setIsLoading(true);
@@ -72,13 +81,19 @@ export default function CatalogPage() {
         search: searchQuery || undefined,
         limit: 50,
       });
-      setProducts(res.items);
-      setIsLiveConnected(true);
+      if (isMountedRef.current) {
+        setProducts(res.items);
+        setIsLiveConnected(true);
+      }
     } catch (err: unknown) {
-      setIsLiveConnected(false);
-      setActionError(err instanceof Error ? err.message : 'Failed to retrieve products from server');
+      if (isMountedRef.current) {
+        setIsLiveConnected(false);
+        setActionError(err instanceof Error ? err.message : 'Failed to retrieve products from server');
+      }
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [currentWorkspace?.id, token, searchQuery]);
 
@@ -105,12 +120,17 @@ export default function CatalogPage() {
   const handleRefreshFreshness = async (id: string) => {
     setActionError(null);
     if (!currentWorkspace?.id || !token) return;
+    setRefreshingProductId(id);
     try {
-      await api.refreshProductFreshness(currentWorkspace.id, id);
-      void fetchProducts();
+      const updated = await api.refreshProductFreshness(currentWorkspace.id, id);
+      setProducts((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, ...updated, isStale: false } : p)),
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to refresh product on server';
       setActionError(msg);
+    } finally {
+      setRefreshingProductId(null);
     }
   };
 
@@ -217,7 +237,7 @@ export default function CatalogPage() {
         title: newTitle.trim(),
         sku: newSku.trim() || undefined,
         priceCents: Math.round(priceNum * 100),
-        currency: 'USD',
+        currency: currentWorkspace?.currency || 'USD',
         inventoryCount: invNum,
         description: 'Manually added catalog product',
         tags: ['manual'],
@@ -400,7 +420,7 @@ export default function CatalogPage() {
                       </td>
 
                       <td className="py-3 px-4 font-mono font-medium text-[#17202A]">
-                        ${(product.priceCents / 100).toFixed(2)} {product.currency}
+                        {formatCurrency(product.priceCents, product.currency, currentWorkspace?.locale)}
                       </td>
 
                       <td className="py-3 px-4">
@@ -432,11 +452,16 @@ export default function CatalogPage() {
                       <td className="py-3 px-4 text-right space-x-2">
                         <button
                           type="button"
+                          disabled={refreshingProductId === product.id}
                           onClick={() => void handleRefreshFreshness(product.id)}
-                          className="inline-flex items-center p-1 rounded text-[#667085] hover:text-[#17202A] hover:bg-[#F2F4F7]"
-                          title="Re-verify catalog freshness"
+                          className="inline-flex items-center p-1 rounded text-[#667085] hover:text-[#17202A] hover:bg-[#F2F4F7] disabled:opacity-50"
+                          title="Re-verify catalog freshness & sync live store details"
                         >
-                          <RefreshCw className="w-3.5 h-3.5" />
+                          <RefreshCw
+                            className={`w-3.5 h-3.5 ${
+                              refreshingProductId === product.id ? 'animate-spin text-[#E85D2A]' : ''
+                            }`}
+                          />
                         </button>
                         <button
                           type="button"
@@ -661,7 +686,9 @@ export default function CatalogPage() {
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs font-semibold text-[#344054] mb-1.5">Price ($ USD) *</label>
+                      <label className="block text-xs font-semibold text-[#344054] mb-1.5">
+                        Price ({currentWorkspace?.currency || 'USD'}) *
+                      </label>
                       <input
                         type="number"
                         step="0.01"

@@ -39,17 +39,42 @@ export class CampaignsService {
   }
 
   async listCampaigns(workspaceId: string) {
-    return this.prisma.campaign.findMany({
+    const campaigns = await this.prisma.campaign.findMany({
       where: { workspaceId },
       include: {
         _count: {
           select: {
             posts: true,
             trackedClicks: true,
+            conversions: true,
+          },
+        },
+        conversions: {
+          select: {
+            orderTotalCents: true,
+            currency: true,
           },
         },
       },
       orderBy: { createdAt: 'desc' },
+    });
+
+    return campaigns.map((camp) => {
+      const revenueCents = camp.conversions.reduce((sum, c) => sum + c.orderTotalCents, 0);
+      const clicks = camp._count.trackedClicks;
+      const conversions = camp._count.conversions;
+      const conversionRate = clicks > 0 ? Number(((conversions / clicks) * 100).toFixed(2)) : 0;
+
+      const { conversions: _rawConversions, ...campData } = camp;
+      return {
+        ...campData,
+        metrics: {
+          clicks,
+          conversions,
+          revenueCents,
+          conversionRate,
+        },
+      };
     });
   }
 
@@ -61,10 +86,20 @@ export class CampaignsService {
           take: 10,
           orderBy: { createdAt: 'desc' },
         },
+        conversions: {
+          take: 20,
+          orderBy: { occurredAt: 'desc' },
+        },
+        trackedClicks: {
+          take: 20,
+          orderBy: { clickedAt: 'desc' },
+        },
         _count: {
           select: {
             posts: true,
             trackedClicks: true,
+            conversions: true,
+            trackingLinks: true,
           },
         },
       },
@@ -74,7 +109,22 @@ export class CampaignsService {
       throw new NotFoundException(`Campaign ${campaignId} not found in workspace.`);
     }
 
-    return campaign;
+    const revenueCents = campaign.conversions.reduce((sum, c) => sum + c.orderTotalCents, 0);
+    const clicks = campaign._count.trackedClicks;
+    const conversions = campaign._count.conversions;
+    const conversionRate = clicks > 0 ? Number(((conversions / clicks) * 100).toFixed(2)) : 0;
+    const averageOrderValueCents = conversions > 0 ? Math.round(revenueCents / conversions) : 0;
+
+    return {
+      ...campaign,
+      metrics: {
+        clicks,
+        conversions,
+        revenueCents,
+        conversionRate,
+        averageOrderValueCents,
+      },
+    };
   }
 
   async updateCampaign(

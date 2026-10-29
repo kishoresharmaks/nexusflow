@@ -25,4 +25,5 @@ export interface StoreAdapter {
   readonly platform: StorePlatform;
   testConnection(credentials: StoreCredentials): Promise<boolean>;
   fetchProducts(credentials: StoreCredentials, limit?: number): Promise<SyncedProductData[]>;
+  fetchProduct?(credentials: StoreCredentials, sourceId: string): Promise<SyncedProductData | null>;
 }

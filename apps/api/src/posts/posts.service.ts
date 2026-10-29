@@ -19,11 +19,13 @@ import {
   PostStatus,
   ApprovalStatus,
   AttemptStatus,
+  WorkspaceRole,
   type Post,
   type Approval,
   type PublishAttempt,
   type Prisma,
 } from '@commercepilot/database';
+import { EmailService } from '../email/email.service';
 
 export interface PostListResponse {
   items: Array<
@@ -56,6 +58,7 @@ export class PostsService {
     private readonly socialService: SocialService,
     private readonly adapterFactory: PublishingAdapterFactory,
     private readonly publishingQueueService?: PublishingQueueService,
+    private readonly emailService?: EmailService,
   ) {}
 
   private validateObjectId(id: string, label: string): void {
@@ -384,6 +387,41 @@ export class PostsService {
       ipAddress: clientIp,
     });
 
+    if (this.emailService) {
+      try {
+        const [author, ws, approvers] = await Promise.all([
+          this.prisma.user.findUnique({ where: { id: userId }, select: { name: true, email: true } }),
+          this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true } }),
+          this.prisma.membership.findMany({
+            where: {
+              workspaceId,
+              role: { in: [WorkspaceRole.OWNER, WorkspaceRole.ADMIN] },
+              userId: { not: userId },
+            },
+            include: { user: { select: { email: true, name: true } } },
+          }),
+        ]);
+
+        const authorName = author?.name || 'A team member';
+        const wsName = ws?.name || 'Workspace';
+        const postTitle = post.content.slice(0, 80);
+
+        for (const approver of approvers) {
+          if (approver.user?.email) {
+            await this.emailService.sendPostApprovalRequestedEmail(
+              approver.user.email,
+              postTitle,
+              authorName,
+              wsName,
+              post.id,
+            );
+          }
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to dispatch approval requested email: ${err instanceof Error ? err.message : 'Unknown'}`);
+      }
+    }
+
     return updated;
   }
 
@@ -435,6 +473,33 @@ export class PostsService {
       metadata: { notes: dto.decisionNotes },
       ipAddress: clientIp,
     });
+
+    if (this.emailService) {
+      try {
+        const [ws, approverUser, lastApprovalAudit] = await Promise.all([
+          this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true } }),
+          this.prisma.user.findUnique({ where: { id: reviewerId }, select: { name: true } }),
+          this.prisma.auditEvent.findFirst({
+            where: { workspaceId, resourceId: postId, action: 'POST_APPROVAL_REQUESTED' },
+            orderBy: { createdAt: 'desc' },
+            include: { user: { select: { email: true, name: true } } },
+          }),
+        ]);
+
+        const targetEmail = lastApprovalAudit?.user?.email;
+        if (targetEmail) {
+          await this.emailService.sendPostApprovedEmail(
+            targetEmail,
+            post.content.slice(0, 80),
+            ws?.name || 'Workspace',
+            approverUser?.name || 'Reviewer',
+            dto.decisionNotes ?? undefined,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to dispatch post approved email: ${err instanceof Error ? err.message : 'Unknown'}`);
+      }
+    }
 
     return updated;
   }
@@ -488,6 +553,33 @@ export class PostsService {
       ipAddress: clientIp,
     });
 
+    if (this.emailService) {
+      try {
+        const [ws, reviewerUser, lastApprovalAudit] = await Promise.all([
+          this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true } }),
+          this.prisma.user.findUnique({ where: { id: reviewerId }, select: { name: true } }),
+          this.prisma.auditEvent.findFirst({
+            where: { workspaceId, resourceId: postId, action: 'POST_APPROVAL_REQUESTED' },
+            orderBy: { createdAt: 'desc' },
+            include: { user: { select: { email: true, name: true } } },
+          }),
+        ]);
+
+        const targetEmail = lastApprovalAudit?.user?.email;
+        if (targetEmail) {
+          await this.emailService.sendPostRejectedEmail(
+            targetEmail,
+            post.content.slice(0, 80),
+            ws?.name || 'Workspace',
+            reviewerUser?.name || 'Reviewer',
+            dto.decisionNotes ?? undefined,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to dispatch post rejected email: ${err instanceof Error ? err.message : 'Unknown'}`);
+      }
+    }
+
     return updated;
   }
 
@@ -512,7 +604,7 @@ export class PostsService {
       throw new NotFoundException('Post not found in this workspace.');
     }
 
-    // In CommercePilot: posts must be APPROVED or DRAFT before scheduling
+    // In NexusFlow: posts must be APPROVED or DRAFT before scheduling
     if (
       post.status !== PostStatus.APPROVED &&
       post.status !== PostStatus.DRAFT &&
@@ -641,9 +733,15 @@ export class PostsService {
       throw new NotFoundException('Post not found in this workspace.');
     }
 
-    if (post.status === PostStatus.PUBLISHING || post.status === PostStatus.PUBLISHED) {
+    if (
+      post.status === PostStatus.PUBLISHING ||
+      post.status === PostStatus.PUBLISHED ||
+      post.status === PostStatus.UNKNOWN_OUTCOME
+    ) {
       throw new ConflictException(
-        `Post is already ${post.status}. Duplicate publishing disallowed.`,
+        post.status === PostStatus.UNKNOWN_OUTCOME
+          ? 'Post publish outcome is being verified. Reconciliation must resolve before any retry.'
+          : `Post is already ${post.status}. Duplicate publishing disallowed.`,
       );
     }
 
@@ -692,13 +790,19 @@ export class PostsService {
     );
 
     const attemptNumber = post.publishAttempts.length + 1;
+    const isAmbiguous =
+      result.errorCode === 'AMBIGUOUS_PUBLISH_OUTCOME' || result.errorCode === 'AMBIGUOUS_TIMEOUT';
 
     // 4. Record PublishAttempt
     const attempt = await this.prisma.publishAttempt.create({
       data: {
         postId: post.id,
         attemptNumber,
-        status: result.success ? AttemptStatus.SUCCESS : AttemptStatus.FAILED,
+        status: result.success
+          ? AttemptStatus.SUCCESS
+          : isAmbiguous
+            ? AttemptStatus.UNKNOWN
+            : AttemptStatus.FAILED,
         providerRequestId: result.providerRequestId ?? null,
         errorCode: result.errorCode ?? null,
         errorMessage: result.errorMessage ?? null,
@@ -731,6 +835,31 @@ export class PostsService {
         },
         ipAddress: clientIp,
       });
+    } else if (isAmbiguous) {
+      // Outcome unknown: never mark FAILED (a blind retry could duplicate).
+      // Persist UNKNOWN_OUTCOME and schedule reconciliation.
+      finalPost = await this.prisma.post.update({
+        where: { id: postId },
+        data: {
+          status: PostStatus.UNKNOWN_OUTCOME,
+          reconciliationAttempts: 0,
+          reconciliationDueAt: new Date(Date.now() + 2 * 60 * 1000),
+          socialAccount: { connect: { id: socialAccount.id } },
+        },
+      });
+
+      await this.auditService.record({
+        workspaceId,
+        userId,
+        action: 'POST_PUBLISH_UNKNOWN_OUTCOME',
+        resourceType: 'Post',
+        resourceId: postId,
+        metadata: {
+          errorCode: result.errorCode,
+          errorMessage: result.errorMessage,
+        },
+        ipAddress: clientIp,
+      });
     } else {
       // On failure, update post status to FAILED
       finalPost = await this.prisma.post.update({
@@ -754,6 +883,27 @@ export class PostsService {
         },
         ipAddress: clientIp,
       });
+    }
+
+    if (this.emailService) {
+      try {
+        const [publisher, ws] = await Promise.all([
+          this.prisma.user.findUnique({ where: { id: userId }, select: { email: true } }),
+          this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true } }),
+        ]);
+
+        if (publisher?.email) {
+          await this.emailService.sendPostPublishStatusEmail(
+            publisher.email,
+            post.content.slice(0, 80),
+            ws?.name || 'Workspace',
+            result.success ? 'PUBLISHED' : isAmbiguous ? 'UNKNOWN_OUTCOME' : 'FAILED',
+            result.errorMessage ?? undefined,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to dispatch post publish status email: ${err instanceof Error ? err.message : 'Unknown'}`);
+      }
     }
 
     return { post: finalPost, attempt };

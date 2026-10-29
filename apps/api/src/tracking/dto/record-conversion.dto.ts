@@ -16,4 +16,12 @@ export class RecordConversionDto {
   @IsString()
   @IsOptional()
   attributionSource?: string | undefined;
+
+  @IsString()
+  @IsOptional()
+  campaignId?: string | undefined;
+
+  @IsString()
+  @IsOptional()
+  clickId?: string | undefined;
 }

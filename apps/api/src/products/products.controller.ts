@@ -149,7 +149,7 @@ export class ProductsController {
     return this.productsService.deleteProduct(workspaceId, productId, user.id, ip);
   }
 
-  @Post(':productId/freshness')
+  @Post([':productId/freshness', ':productId/refresh-freshness'])
   @UseGuards(RolesGuard)
   @Roles(WorkspaceRole.OWNER, WorkspaceRole.ADMIN, WorkspaceRole.MEMBER)
   @ApiOperation({ summary: 'Trigger manual freshness verification for a product' })

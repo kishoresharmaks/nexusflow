@@ -1,7 +1,14 @@
+export type UserAccountStatus = 'PENDING_ACTIVATION' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED';
+export type MembershipStatus = 'PENDING_ACCEPTANCE' | 'ACTIVE' | 'SUSPENDED' | 'REMOVED';
+export type InvitationStatus = 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
+
 export interface User {
   id: string;
   email: string;
   name: string;
+  isEmailVerified?: boolean;
+  emailVerifiedAt?: string | null;
+  accountStatus?: UserAccountStatus;
 }
 
 export interface AuthResponse {
@@ -14,6 +21,13 @@ export interface Workspace {
   name: string;
   slug: string;
   role?: string | undefined;
+  status?: MembershipStatus | undefined;
+  timezone?: string | undefined;
+  locale?: string | undefined;
+  currency?: string | undefined;
+  logoUrl?: string | null | undefined;
+  createdAt?: string | undefined;
+  updatedAt?: string | undefined;
 }
 
 export type WorkspaceRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
@@ -21,14 +35,23 @@ export type WorkspaceRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
 export interface WorkspaceMember {
   membershipId: string;
   role: WorkspaceRole;
+  status?: MembershipStatus;
   joinedAt: string;
-  user: { id: string; name: string; email: string; isEmailVerified: boolean };
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    isEmailVerified: boolean;
+    emailVerifiedAt?: string | null;
+    accountStatus?: UserAccountStatus;
+  };
 }
 
 export interface WorkspaceInvitation {
   id: string;
   emailNormalized: string;
   role: WorkspaceRole;
+  status?: InvitationStatus;
   expiresAt: string;
   acceptedAt: string | null;
   revokedAt: string | null;
@@ -182,6 +205,7 @@ export type PostStatusType =
   | 'SCHEDULED'
   | 'PUBLISHING'
   | 'PUBLISHED'
+  | 'UNKNOWN_OUTCOME'
   | 'FAILED'
   | 'CANCELLED';
 
@@ -227,7 +251,7 @@ export interface PublishAttemptItem {
   id: string;
   postId: string;
   attemptNumber: number;
-  status: 'PENDING' | 'SUCCESS' | 'FAILED';
+  status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'UNKNOWN';
   providerRequestId?: string | null | undefined;
   errorCode?: string | null | undefined;
   errorMessage?: string | null | undefined;
@@ -270,6 +294,105 @@ export interface SubscriptionItem {
   updatedAt: string;
 }
 
+export interface ActionCard {
+  id: string;
+  level: 'info' | 'warning' | 'urgent';
+  title: string;
+  description: string;
+  actionHref: string;
+  actionLabel: string;
+}
+
+export interface WorkspaceAdminSummary {
+  workspace: {
+    id: string;
+    name: string;
+    slug: string;
+    timezone: string;
+    locale: string;
+    currency: string;
+    createdAt: string;
+  };
+  plan: {
+    planId: string;
+    planName: string;
+    status: string;
+    currentPeriodEnd: string | null;
+    limits: {
+      maxPosts: number;
+      currentPosts: number;
+      maxSocialAccounts: number;
+      currentSocialAccounts: number;
+      maxTeamMembers: number;
+      currentTeamMembers: number;
+    };
+  };
+  counts: {
+    teamMembers: number;
+    pendingInvitations: number;
+    activeProducts: number;
+    connectedSocialAccounts: number;
+    connectedStores: number;
+    draftsAwaitingApproval: number;
+    scheduledPosts: number;
+    publishedPosts: number;
+    failedPosts: number;
+  };
+  actionCards: ActionCard[];
+  recentActivity: Array<{
+    id: string;
+    action: string;
+    resourceType: string;
+    resourceId: string | null;
+    createdAt: string;
+    actor: { name: string; email: string } | null;
+    metadata: unknown;
+  }>;
+}
+
+export interface WorkspaceDataPrivacySummary {
+  workspace: { id: string; name: string; slug: string; createdAt: string };
+  data: { members: number; invitations: number; products: number; mediaAssets: number; posts: number; socialAccounts: number; stores: number };
+  export: { personalExportEndpoint: string; workspaceExportStatus: 'NOT_CONFIGURED'; note: string };
+  deletion: { status: 'REQUEST_ONLY'; note: string };
+}
+
+export interface ApprovalPolicy {
+  id?: string;
+  workspaceId: string;
+  requiresApprovalBeforeSchedule: boolean;
+  requiresApprovalBeforePublish: boolean;
+  allowedApproverRoles: WorkspaceRole[];
+  updatedByUserId?: string | null;
+  createdAt?: string;
+  updatedAt?: string | null;
+}
+
+export interface PaginatedAuditLogs {
+  items: Array<{
+    id: string;
+    workspaceId: string;
+    userId: string | null;
+    action: string;
+    resourceType: string;
+    resourceId: string | null;
+    ipAddress: string | null;
+    metadata: unknown;
+    createdAt: string;
+    user?: {
+      id: string;
+      name: string;
+      email: string;
+    } | null;
+  }>;
+  meta: {
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+}
+
 export interface BillingUsageItem {
   plan: BillingPlanItem;
   status: 'TRIALING' | 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | 'UNPAID';
@@ -298,6 +421,7 @@ export interface BillingEventItem {
 export interface CheckoutSessionResult {
   sessionId: string;
   orderId: string;
+  keyId: string;
   planId: string;
   planName: string;
   amountCents: number;
@@ -336,6 +460,104 @@ export interface SyncStoreResult {
   message?: string | undefined;
 }
 
+export interface CustomProductItem {
+  sourceId: string;
+  title: string;
+  priceCents: number;
+  currency?: string | undefined;
+  sku?: string | undefined;
+  inventoryCount?: number | undefined;
+  description?: string | undefined;
+  url?: string | undefined;
+  images?: string[] | undefined;
+  tags?: string[] | undefined;
+  isActive?: boolean | undefined;
+}
+
+export interface CustomProductBatchPayload {
+  products: CustomProductItem[];
+  storeName?: string | undefined;
+}
+
+export interface CustomIngestResponse {
+  success: boolean;
+  total: number;
+  created: number;
+  updated: number;
+  failed: number;
+  message: string;
+}
+
+export interface CustomValidationResponse {
+  valid: boolean;
+  normalizedCount: number;
+  errors: string[];
+  sample: Array<{
+    sourceId: string;
+    sku?: string | undefined;
+    title: string;
+    description?: string | undefined;
+    priceCents: number;
+    currency: string;
+    inventoryCount: number;
+    url?: string | undefined;
+    images: string[];
+    tags: string[];
+  }>;
+}
+
+export interface CustomIngestHistoryItem {
+  id: string;
+  timestamp: string;
+  storeName: string;
+  total: number;
+  created: number;
+  updated: number;
+  actor: { name: string; email: string } | null;
+}
+
+export interface OrderWebhookSimulationRequest {
+  provider?: 'shopify' | 'custom' | 'woocommerce' | undefined;
+  eventType?: string | undefined;
+  payload: Record<string, unknown>;
+  secret?: string | undefined;
+  tamperSignature?: boolean | undefined;
+}
+
+export interface OrderWebhookSimulationResponse {
+  success: boolean;
+  httpStatus: number;
+  provider: string;
+  eventType: string;
+  orderId: string;
+  hmacSignature: string;
+  hmacValid: boolean;
+  idempotencyStatus: 'processed' | 'already_processed' | 'failed';
+  orderTotalCents: number;
+  currency: string;
+  attribution: {
+    campaignId?: string | undefined;
+    campaignName?: string | undefined;
+    source?: string | undefined;
+  };
+  error?: string | undefined;
+  message: string;
+}
+
+export interface SocialRefreshExpiringResult {
+  scanned: number;
+  refreshed: number;
+  failed: number;
+  expired: number;
+  results: Array<{
+    id: string;
+    displayName: string;
+    provider: string;
+    status: 'refreshed' | 'expired' | 'failed';
+    error?: string | undefined;
+  }>;
+}
+
 export interface CampaignItem {
   id: string;
   workspaceId: string;
@@ -350,8 +572,44 @@ export interface CampaignItem {
     | {
         posts: number;
         trackedClicks: number;
+        conversions?: number;
       }
     | undefined;
+  metrics?: {
+    clicks: number;
+    conversions: number;
+    revenueCents: number;
+    conversionRate: number;
+    averageOrderValueCents?: number;
+  };
+}
+
+export interface TrackingLinkItem {
+  id: string;
+  workspaceId: string;
+  campaignId?: string | null | undefined;
+  shortCode: string;
+  shortUrl: string;
+  destinationUrl: string;
+  utmSource: string;
+  utmMedium: string;
+  utmCampaign?: string | null | undefined;
+  utmContent?: string | null | undefined;
+  utmTerm?: string | null | undefined;
+  clickCount: number;
+  createdAt: string;
+  updatedAt: string;
+  campaign?: { id: string; name: string; utmCampaign?: string | null } | null | undefined;
+}
+
+export interface CreateTrackingLinkPayload {
+  destinationUrl: string;
+  utmSource: string;
+  utmMedium: string;
+  utmCampaign?: string | undefined;
+  utmContent?: string | undefined;
+  utmTerm?: string | undefined;
+  campaignId?: string | undefined;
 }
 
 export interface CreateCampaignPayload {
@@ -360,6 +618,592 @@ export interface CreateCampaignPayload {
   startDate?: string | undefined;
   endDate?: string | undefined;
   utmCampaign?: string | undefined;
+}
+
+export interface SuperAdminProfile {
+  id: string;
+  userId: string;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    isEmailVerified: boolean;
+    createdAt: string;
+  };
+  role: 'SUPER_ADMIN' | 'SUPPORT_ADMIN' | 'BILLING_ADMIN';
+  status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+  permissions: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SuperAdminDashboardOverview {
+  users: {
+    total: number;
+    active: number;
+    suspended: number;
+  };
+  workspaces: {
+    total: number;
+    active: number;
+    suspended: number;
+  };
+  content: {
+    totalPosts: number;
+    totalCampaigns: number;
+    totalStoreConnections: number;
+  };
+  aiUsage: {
+    totalRequests: number;
+    totalTokens: number;
+    promptTokens: number;
+    completionTokens: number;
+    costEstimateMicrocents: number;
+  };
+  recentActivity: Array<{
+    id: string;
+    actorId: string;
+    actorEmail: string;
+    action: string;
+    targetType: string;
+    targetId?: string | null | undefined;
+    reason?: string | null | undefined;
+    outcome: string;
+    createdAt: string;
+    metadata?: Record<string, unknown> | null | undefined;
+  }>;
+}
+
+export interface SuperAdminGrowthPoint {
+  date: string;
+  users: number;
+  workspaces: number;
+}
+
+export interface SuperAdminHealth {
+  database: {
+    status: string;
+    latencyMs: number;
+  };
+  integrations: {
+    stores: {
+      healthy: number;
+      failing: number;
+    };
+    socialAccounts: {
+      healthy: number;
+      attentionRequired: number;
+    };
+  };
+  timestamp: string;
+}
+
+export interface SuperAdminAuditLogsResponse {
+  data: Array<{
+    id: string;
+    actorId: string;
+    actorEmail: string;
+    action: string;
+    targetType: string;
+    targetId?: string | null | undefined;
+    reason?: string | null | undefined;
+    outcome: string;
+    ipAddress?: string | null | undefined;
+    userAgent?: string | null | undefined;
+    metadata?: Record<string, unknown> | null | undefined;
+    createdAt: string;
+  }>;
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface PlatformAdminItem {
+  id: string;
+  userId: string;
+  role: 'SUPER_ADMIN' | 'SUPPORT_ADMIN' | 'BILLING_ADMIN';
+  status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+  permissions: string[];
+  createdBy?: string | null | undefined;
+  createdAt: string;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    isEmailVerified: boolean;
+    createdAt: string;
+  };
+}
+
+export interface SuperAdminUserItem {
+  id: string;
+  email: string;
+  name: string;
+  isEmailVerified: boolean;
+  isSuspended: boolean;
+  suspendedAt?: string | null | undefined;
+  suspensionReason?: string | null | undefined;
+  createdAt: string;
+  updatedAt: string;
+  platformAdmin?: {
+    id: string;
+    role: 'SUPER_ADMIN' | 'SUPPORT_ADMIN' | 'BILLING_ADMIN';
+    status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+  } | null | undefined;
+  workspaces: Array<{
+    id: string;
+    name: string;
+    slug: string;
+    status: string;
+    role: string;
+  }>;
+  totalSessions: number;
+  activeSessionsCount: number;
+  membershipsCount: number;
+}
+
+export interface SuperAdminUsersResponse {
+  users: SuperAdminUserItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface SuperAdminUserDetails {
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    isEmailVerified: boolean;
+    isSuspended: boolean;
+    suspendedAt?: string | null | undefined;
+    suspensionReason?: string | null | undefined;
+    createdAt: string;
+    updatedAt: string;
+  };
+  platformAdmin?: {
+    id: string;
+    role: string;
+    status: string;
+    permissions: string[];
+  } | null | undefined;
+  workspaces: Array<{
+    membershipId: string;
+    role: string;
+    joinedAt: string;
+    workspace: {
+      id: string;
+      name: string;
+      slug: string;
+      status: string;
+      planTier: string;
+      createdAt: string;
+    };
+  }>;
+  sessions: Array<{
+    id: string;
+    ipAddress?: string | null | undefined;
+    userAgent?: string | null | undefined;
+    createdAt: string;
+    expiresAt: string;
+    revokedAt?: string | null | undefined;
+    isValid: boolean;
+  }>;
+  recentAuditLogs: Array<{
+    id: string;
+    action: string;
+    actorEmail: string;
+    outcome: string;
+    reason?: string | null | undefined;
+    createdAt: string;
+  }>;
+}
+
+export interface SuperAdminWorkspaceItem {
+  id: string;
+  name: string;
+  slug: string;
+  timezone: string;
+  locale: string;
+  currency: string;
+  status: 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED';
+  suspendedAt?: string | null | undefined;
+  suspensionReason?: string | null | undefined;
+  planTier: string;
+  customQuotas?: Record<string, unknown> | null | undefined;
+  createdAt: string;
+  updatedAt: string;
+  owner?: {
+    id: string;
+    name: string;
+    email: string;
+  } | null | undefined;
+  stats: {
+    totalMembers: number;
+    totalStores: number;
+    totalPosts: number;
+    totalCampaigns: number;
+  };
+}
+
+export interface SuperAdminWorkspacesResponse {
+  workspaces: SuperAdminWorkspaceItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface SuperAdminWorkspaceDetails {
+  workspace: {
+    id: string;
+    name: string;
+    slug: string;
+    timezone: string;
+    locale: string;
+    currency: string;
+    status: 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED';
+    suspendedAt?: string | null | undefined;
+    suspensionReason?: string | null | undefined;
+    planTier: string;
+    customQuotas?: Record<string, unknown> | null | undefined;
+    createdAt: string;
+    updatedAt: string;
+  };
+  members: Array<{
+    id: string;
+    role: string;
+    joinedAt: string;
+    user: {
+      id: string;
+      name: string;
+      email: string;
+      isSuspended: boolean;
+      createdAt: string;
+    };
+  }>;
+  stores: Array<{
+    id: string;
+    platform: string;
+    storeName: string;
+    storeUrl: string;
+    syncStatus: string;
+    syncedProducts: number;
+    lastSyncAt?: string | null | undefined;
+    createdAt: string;
+  }>;
+  stats: {
+    totalMembers: number;
+    totalStores: number;
+    totalProducts: number;
+    totalPosts: number;
+    postsByStatus: {
+      PUBLISHED: number;
+      SCHEDULED: number;
+      DRAFT: number;
+    };
+    totalCampaigns: number;
+    ai: {
+      totalRequests: number;
+      totalTokens: number;
+      estimatedCostMicrocents: number;
+    };
+  };
+  recentAuditLogs: Array<{
+    id: string;
+    action: string;
+    actorEmail: string;
+    outcome: string;
+    reason?: string | null | undefined;
+    createdAt: string;
+  }>;
+}
+
+export interface SuperAdminIntegrationsSummary {
+  stores: {
+    total: number;
+    healthy: number;
+    failing: number;
+    syncing: number;
+    platforms: {
+      SHOPIFY: number;
+      WOOCOMMERCE: number;
+      CUSTOM: number;
+    };
+  };
+  social: {
+    total: number;
+    active: number;
+    expired: number;
+    revoked: number;
+    expiringSoon: number;
+    providers: {
+      META_INSTAGRAM: number;
+      LINKEDIN: number;
+    };
+  };
+  timestamp: string;
+}
+
+export interface SuperAdminStoreConnectionItem {
+  id: string;
+  workspaceId: string;
+  platform: 'SHOPIFY' | 'WOOCOMMERCE' | 'CUSTOM';
+  storeName: string;
+  storeUrl: string;
+  apiVersion?: string | null | undefined;
+  lastSyncAt?: string | null | undefined;
+  syncStatus: 'IDLE' | 'SYNCING' | 'SUCCESS' | 'FAILED';
+  errorMessage?: string | null | undefined;
+  syncedProducts: number;
+  createdAt: string;
+  updatedAt: string;
+  workspace: {
+    id: string;
+    name: string;
+    slug: string;
+    status: string;
+    planTier: string;
+  };
+}
+
+export interface SuperAdminIntegrationStoresResponse {
+  stores: SuperAdminStoreConnectionItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface SuperAdminSocialAccountItem {
+  id: string;
+  workspaceId: string;
+  provider: 'META_INSTAGRAM' | 'META_FACEBOOK' | 'TIKTOK' | 'PINTEREST' | 'YOUTUBE' | 'TWITTER' | 'LINKEDIN';
+  providerAccountId: string;
+  displayName: string;
+  username?: string | null | undefined;
+  tokenExpiresAt?: string | null | undefined;
+  scopes: string[];
+  status: 'ACTIVE' | 'EXPIRED' | 'REVOKED' | 'DISCONNECTED';
+  createdAt: string;
+  updatedAt: string;
+  daysUntilExpiration?: number | null | undefined;
+  isExpiringSoon?: boolean | undefined;
+  workspace: {
+    id: string;
+    name: string;
+    slug: string;
+    status: string;
+    planTier: string;
+  };
+}
+
+export interface SuperAdminIntegrationSocialResponse {
+  accounts: SuperAdminSocialAccountItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface SuperAdminBillingSummary {
+  mrrCents: number;
+  arrCents: number;
+  totalRevenueCents: number;
+  subscriptions: {
+    total: number;
+    active: number;
+    trialing: number;
+    pastDue: number;
+    canceled: number;
+  };
+  planDistribution: Record<string, number>;
+}
+
+export interface SuperAdminSubscriptionItem {
+  id: string;
+  workspaceId: string;
+  planId: string;
+  status: 'TRIALING' | 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | 'UNPAID';
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
+  cancelAtPeriodEnd: boolean;
+  createdAt: string;
+  updatedAt: string;
+  workspace: {
+    id: string;
+    name: string;
+    slug: string;
+    planTier: string;
+    status: string;
+    _count: {
+      memberships: number;
+    };
+  };
+}
+
+export interface SuperAdminSubscriptionsResponse {
+  subscriptions: SuperAdminSubscriptionItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface SuperAdminAiSummary {
+  totalRequests: number;
+  totalTokens: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalCostEstimateMicrocents: number;
+  totalCostEstimateUsd: number;
+  providerBreakdown: Record<
+    string,
+    {
+      requests: number;
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      costMicrocents: number;
+    }
+  >;
+  featureBreakdown: Record<
+    string,
+    {
+      requests: number;
+      totalTokens: number;
+      costMicrocents: number;
+    }
+  >;
+}
+
+export interface SuperAdminAiUsageItem {
+  id: string;
+  workspaceId: string;
+  provider: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  costEstimateMicrocents: number;
+  feature: string;
+  createdAt: string;
+  workspace?: {
+    id: string;
+    name: string;
+    slug: string;
+  } | undefined;
+}
+
+export interface SuperAdminAiUsageResponse {
+  usage: SuperAdminAiUsageItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface SuperAdminTopAiTenant {
+  workspaceId: string;
+  workspaceName: string;
+  workspaceSlug: string;
+  planTier: string;
+  totalTokens: number;
+  costEstimateMicrocents: number;
+  costEstimateUsd: number;
+  requestCount: number;
+}
+
+export interface SuperAdminQueueItem {
+  name: string;
+  displayName: string;
+  status: 'HEALTHY' | 'IDLE' | 'DEGRADED';
+  waiting: number;
+  active: number;
+  failed: number;
+  completed: number;
+}
+
+export interface SuperAdminJobFailureItem {
+  id: string;
+  type: 'POST_PUBLISH' | 'CATALOG_IMPORT';
+  workspaceId: string;
+  targetName: string;
+  errorMessage: string;
+  failedAt: string;
+}
+
+export interface SuperAdminJobsOverview {
+  redisStatus: 'ONLINE' | 'OFFLINE';
+  workerMode: 'BULLMQ_DISTRIBUTED' | 'DIRECT_MONGODB_POLLING';
+  queues: SuperAdminQueueItem[];
+  workload: {
+    failedPosts: number;
+    scheduledPosts: number;
+    publishingPosts: number;
+    pendingImports: number;
+    failedImports: number;
+  };
+  recentFailures: SuperAdminJobFailureItem[];
+}
+
+export interface SuperAdminPlatformSetting {
+  id: string;
+  key: string;
+  value: Record<string, unknown> | string | number | boolean;
+  description?: string | null | undefined;
+  isPublic: boolean;
+  updatedBy?: string | null | undefined;
+  version: number;
+  updatedAt: string;
+}
+
+export interface SuperAdminAnnouncement {
+  id: string;
+  title: string;
+  content: string;
+  audience: string;
+  isPublished: boolean;
+  publishedAt?: string | null | undefined;
+  expiresAt?: string | null | undefined;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SuperAdminEmailStatus {
+  activeProvider: string;
+  isConfigured: boolean;
+  fromAddress: string;
+  availableProviders: string[];
+  outboxCount: number;
+}
+
+export interface SuperAdminEmailVerificationResult {
+  ok: boolean;
+  provider: string;
+  message: string;
+  latencyMs: number;
+}
+
+export interface SuperAdminEmailTestResult {
+  id: string;
+  provider: string;
+  timestamp: string;
+  latencyMs: number;
 }
 
 export interface GenerateUtmUrlPayload {
@@ -433,10 +1277,74 @@ export interface BestTimeRecommendation {
   reason: string;
 }
 
-const API_BASE_URL = process.env['NEXT_PUBLIC_API_URL'] || 'http://localhost:4000/api/v1';
+export interface CampaignAnalyticsItem {
+  id: string;
+  name: string;
+  utmCampaign: string | null;
+  postsCount: number;
+  clicks: number;
+  conversions: number;
+  revenueCents: number;
+  conversionRate: number;
+  averageOrderValueCents: number;
+}
+
+export interface ChannelAnalyticsItem {
+  channel: string;
+  clicks: number;
+  conversions: number;
+  revenueCents: number;
+  conversionRate: number;
+  sharePercentage: number;
+}
+
+export interface ProductAnalyticsItem {
+  id: string;
+  title: string;
+  sku: string | null;
+  priceCents: number;
+  currency: string;
+  imageUrl: string | null;
+  clicks: number;
+  conversions: number;
+  revenueCents: number;
+  conversionRate: number;
+}
+
+export interface RecentConversionItem {
+  id: string;
+  orderId: string;
+  orderTotalCents: number;
+  currency: string;
+  campaignId: string | null;
+  campaignName: string | null;
+  attributionSource: string;
+  targetUrl: string | null;
+  occurredAt: string;
+}
+
+export function resolveApiBaseUrl(): string {
+  if (process.env['NEXT_PUBLIC_API_URL']) {
+    return process.env['NEXT_PUBLIC_API_URL'].replace(/\/+$/, '');
+  }
+  if (typeof window !== 'undefined') {
+    const { hostname, protocol } = window.location;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return `${protocol}//${hostname}:4000/api/v1`;
+    }
+    return `${window.location.origin}/api/v1`;
+  }
+  return 'http://localhost:4000/api/v1';
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 class ApiClient {
   private token: string | null = null;
+
+  public getBaseUrl(): string {
+    return resolveApiBaseUrl();
+  }
 
   public setToken(token: string | null): void {
     this.token = token;
@@ -509,6 +1417,23 @@ class ApiClient {
   }
 
   // --- Auth ---
+  async getPublicAuthConfig(): Promise<{
+    allowPublicRegistrations: boolean;
+    maintenanceMode?: { enabled: boolean; message?: string };
+  }> {
+    try {
+      return await this.request<{
+        allowPublicRegistrations: boolean;
+        maintenanceMode?: { enabled: boolean; message?: string };
+      }>('/auth/config');
+    } catch {
+      return {
+        allowPublicRegistrations: true,
+        maintenanceMode: { enabled: false },
+      };
+    }
+  }
+
   async login(email: string, password: string): Promise<AuthResponse> {
     const res = await this.request<AuthResponse>('/auth/login', {
       method: 'POST',
@@ -523,6 +1448,7 @@ class ApiClient {
     email: string,
     password: string,
     workspaceName?: string,
+    invitationToken?: string,
   ): Promise<AuthResponse> {
     const res = await this.request<AuthResponse>('/auth/register', {
       method: 'POST',
@@ -531,6 +1457,7 @@ class ApiClient {
         email,
         password,
         ...(workspaceName ? { workspaceName } : {}),
+        ...(invitationToken ? { invitationToken } : {}),
       }),
     });
     this.setToken(res.sessionToken);
@@ -576,9 +1503,34 @@ class ApiClient {
     email: string,
     role: Exclude<WorkspaceRole, 'OWNER'>,
   ): Promise<WorkspaceInvitation> {
-    return this.request<WorkspaceInvitation>(`/workspaces/${workspaceId}/members`, {
+    return this.request<WorkspaceInvitation>(`/workspaces/${workspaceId}/invitations`, {
       method: 'POST',
       body: JSON.stringify({ email, role }),
+    });
+  }
+
+  async createMemberDirectly(
+    workspaceId: string,
+    name: string,
+    email: string,
+    role: Exclude<WorkspaceRole, 'OWNER'>,
+    department?: string,
+  ): Promise<WorkspaceMember> {
+    return this.request<WorkspaceMember>(`/workspaces/${workspaceId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ name, email, role, department }),
+    });
+  }
+
+  async updateWorkspaceMemberStatus(
+    workspaceId: string,
+    membershipId: string,
+    status: 'ACTIVE' | 'SUSPENDED',
+    reason?: string,
+  ): Promise<WorkspaceMember> {
+    return this.request<WorkspaceMember>(`/workspaces/${workspaceId}/members/${membershipId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, reason }),
     });
   }
 
@@ -587,7 +1539,7 @@ class ApiClient {
     membershipId: string,
     role: Exclude<WorkspaceRole, 'OWNER'>,
   ): Promise<WorkspaceMember> {
-    return this.request<WorkspaceMember>(`/workspaces/${workspaceId}/members/${membershipId}`, {
+    return this.request<WorkspaceMember>(`/workspaces/${workspaceId}/members/${membershipId}/role`, {
       method: 'PATCH',
       body: JSON.stringify({ role }),
     });
@@ -603,6 +1555,113 @@ class ApiClient {
     return this.request<{ success: boolean }>(`/workspaces/${workspaceId}/invitations/${invitationId}`, {
       method: 'DELETE',
     });
+  }
+
+  async resendWorkspaceInvitation(
+    workspaceId: string,
+    invitationId: string,
+  ): Promise<{ success: boolean; id: string; expiresAt: string }> {
+    return this.request<{ success: boolean; id: string; expiresAt: string }>(
+      `/workspaces/${workspaceId}/invitations/${invitationId}/resend`,
+      {
+        method: 'POST',
+      },
+    );
+  }
+
+  async activateAccount(token: string, password: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/auth/activate-account', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
+    });
+  }
+
+  async verifyEmail(token: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  async resendVerification(email?: string): Promise<{
+    message: string;
+    isDevOutbox?: boolean;
+    devVerificationUrl?: string;
+  }> {
+    return this.request<{
+      message: string;
+      isDevOutbox?: boolean;
+      devVerificationUrl?: string;
+    }>('/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async resendActivation(email: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/auth/resend-activation', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async getMe(): Promise<{ user: User; workspaces: Workspace[] }> {
+    return this.request<{ user: User; workspaces: Workspace[] }>('/auth/me');
+  }
+
+  async updateWorkspaceSettings(
+    workspaceId: string,
+    data: { name?: string; timezone?: string; locale?: string; currency?: string; logoUrl?: string | null | undefined },
+  ): Promise<{ id: string; name: string; slug: string; timezone: string; locale: string; currency: string; logoUrl?: string | null }> {
+    return this.request<{ id: string; name: string; slug: string; timezone: string; locale: string; currency: string; logoUrl?: string | null }>(
+      `/workspaces/${workspaceId}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      },
+    );
+  }
+
+  async getWorkspaceAdminSummary(workspaceId: string): Promise<WorkspaceAdminSummary> {
+    return this.request<WorkspaceAdminSummary>(`/workspaces/${workspaceId}/admin-summary`);
+  }
+
+  async getApprovalPolicy(workspaceId: string): Promise<ApprovalPolicy> {
+    return this.request<ApprovalPolicy>(`/workspaces/${workspaceId}/approval-policy`);
+  }
+
+  async updateApprovalPolicy(
+    workspaceId: string,
+    data: {
+      requiresApprovalBeforeSchedule?: boolean;
+      requiresApprovalBeforePublish?: boolean;
+      allowedApproverRoles?: WorkspaceRole[];
+    },
+  ): Promise<ApprovalPolicy> {
+    return this.request<ApprovalPolicy>(`/workspaces/${workspaceId}/approval-policy`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getWorkspaceAuditLogs(
+    workspaceId: string,
+    params?: {
+      page?: number | undefined;
+      limit?: number | undefined;
+      action?: string | undefined;
+      resourceType?: string | undefined;
+    },
+  ): Promise<PaginatedAuditLogs> {
+    const query = new URLSearchParams();
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    if (params?.action) query.set('action', params.action);
+    if (params?.resourceType) query.set('resourceType', params.resourceType);
+    const qs = query.toString();
+    return this.request<PaginatedAuditLogs>(
+      `/workspaces/${workspaceId}/audit-logs${qs ? `?${qs}` : ''}`,
+    );
   }
 
   async startOwnershipTransfer(workspaceId: string, membershipId: string): Promise<{ id: string; expiresAt: string }> {
@@ -687,7 +1746,7 @@ class ApiClient {
 
   async refreshProductFreshness(workspaceId: string, productId: string): Promise<ProductItem> {
     return this.request<ProductItem>(
-      `/workspaces/${workspaceId}/products/${productId}/refresh-freshness`,
+      `/workspaces/${workspaceId}/products/${productId}/freshness`,
       {
         method: 'POST',
       },
@@ -790,6 +1849,18 @@ class ApiClient {
 
   async getMediaAssets(workspaceId: string): Promise<MediaAssetItem[]> {
     return this.request<MediaAssetItem[]>(`/workspaces/${workspaceId}/media`);
+  }
+
+  async getWorkspaceDataPrivacySummary(workspaceId: string): Promise<WorkspaceDataPrivacySummary> {
+    return this.request<WorkspaceDataPrivacySummary>(`/workspaces/${workspaceId}/data-privacy`);
+  }
+
+  async requestWorkspaceDeletionReview(workspaceId: string): Promise<{ accepted: boolean; status: string; message: string }> {
+    return this.request(`/workspaces/${workspaceId}/data-privacy/deletion-request`, { method: 'POST' });
+  }
+
+  async exportMyData(): Promise<unknown> {
+    return this.request('/auth/export-data');
   }
 
   async uploadLocalMediaAsset(workspaceId: string, file: File): Promise<MediaAssetItem> {
@@ -905,6 +1976,7 @@ class ApiClient {
       status: string;
       tokenExpiresAt: string | null;
       createdAt: string;
+      hasRefreshToken?: boolean;
     } | null;
     canPublish: boolean;
   }> {
@@ -933,6 +2005,7 @@ class ApiClient {
         status: string;
         tokenExpiresAt: string | null;
         createdAt: string;
+        hasRefreshToken?: boolean;
       } | null;
       canPublish: boolean;
     };
@@ -1068,6 +2141,7 @@ class ApiClient {
       status: string;
       tokenExpiresAt: string | null;
       createdAt: string;
+      hasRefreshToken?: boolean;
     } | null;
     canPublish: boolean;
   }> {
@@ -1096,6 +2170,7 @@ class ApiClient {
         status: string;
         tokenExpiresAt: string | null;
         createdAt: string;
+        hasRefreshToken?: boolean;
       } | null;
       canPublish: boolean;
     };
@@ -1329,6 +2404,10 @@ class ApiClient {
     );
   }
 
+  async getPublicBillingPlans(): Promise<BillingPlanItem[]> {
+    return this.request<BillingPlanItem[]>('/billing/plans');
+  }
+
   async getBillingPlans(workspaceId: string): Promise<BillingPlanItem[]> {
     return this.request<BillingPlanItem[]>(`/workspaces/${workspaceId}/billing/plans`);
   }
@@ -1352,10 +2431,10 @@ class ApiClient {
     });
   }
 
-  async activateBillingPlan(workspaceId: string, planId: string): Promise<SubscriptionItem> {
+  async activateBillingPlan(workspaceId: string, orderId: string): Promise<SubscriptionItem> {
     return this.request<SubscriptionItem>(`/workspaces/${workspaceId}/billing/activate`, {
       method: 'POST',
-      body: JSON.stringify({ planId }),
+      body: JSON.stringify({ orderId }),
     });
   }
 
@@ -1370,8 +2449,45 @@ class ApiClient {
   }
 
   // Store Integrations
+  async getCustomStoreCredentials(workspaceId: string): Promise<{
+    success: boolean;
+    storeId: string;
+    storeName: string;
+    apiKeyMasked: string;
+    webhookSecretMasked: string;
+    pushEndpoint: string;
+    webhookEndpoint: string;
+    syncedProducts: number;
+    lastSyncAt: string | null;
+  }> {
+    return this.request(`/workspaces/${workspaceId}/integrations/custom/credentials`);
+  }
+
+  async rotateCustomStoreWebhookSecret(workspaceId: string): Promise<{
+    success: boolean;
+    webhookSecret: string;
+    message: string;
+  }> {
+    return this.request(`/workspaces/${workspaceId}/integrations/custom/rotate-secret`, {
+      method: 'POST',
+    });
+  }
+
   async getStoreConnections(workspaceId: string): Promise<StoreConnectionItem[]> {
     return this.request<StoreConnectionItem[]>(`/workspaces/${workspaceId}/integrations/stores`);
+  }
+
+  async authorizeShopify(
+    workspaceId: string,
+    shop: string,
+  ): Promise<{ authUrl: string; shop: string }> {
+    return this.request<{ authUrl: string; shop: string }>(
+      `/workspaces/${workspaceId}/integrations/stores/shopify/authorize`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ shop }),
+      },
+    );
   }
 
   async connectStore(
@@ -1402,14 +2518,79 @@ class ApiClient {
     );
   }
 
+  // --- Custom Store Ingestion & Developer Tools ---
+  async ingestCustomProducts(
+    workspaceId: string,
+    data: CustomProductBatchPayload,
+  ): Promise<CustomIngestResponse> {
+    return this.request<CustomIngestResponse>(`/workspaces/${workspaceId}/integrations/custom/products`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async validateCustomPayload(
+    workspaceId: string,
+    payload: unknown,
+  ): Promise<CustomValidationResponse> {
+    return this.request<CustomValidationResponse>(`/workspaces/${workspaceId}/integrations/custom/validate`, {
+      method: 'POST',
+      body: JSON.stringify({ payload }),
+    });
+  }
+
+  async getCustomIngestHistory(
+    workspaceId: string,
+  ): Promise<CustomIngestHistoryItem[]> {
+    return this.request<CustomIngestHistoryItem[]>(`/workspaces/${workspaceId}/integrations/custom/history`);
+  }
+
+  async simulateOrderWebhook(
+    workspaceId: string,
+    data: OrderWebhookSimulationRequest,
+  ): Promise<OrderWebhookSimulationResponse> {
+    return this.request<OrderWebhookSimulationResponse>(
+      `/workspaces/${workspaceId}/integrations/custom/simulate-order-webhook`,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+    );
+  }
+
+  async refreshExpiringSocialTokens(
+    workspaceId: string,
+    days = 7,
+  ): Promise<SocialRefreshExpiringResult> {
+    return this.request<SocialRefreshExpiringResult>(
+      `/workspaces/${workspaceId}/social-accounts/refresh-expiring?days=${days}`,
+      { method: 'POST' },
+    );
+  }
+
   // Campaigns & UTM
   async getCampaigns(workspaceId: string): Promise<CampaignItem[]> {
     return this.request<CampaignItem[]>(`/workspaces/${workspaceId}/campaigns`);
   }
 
+  async getCampaign(workspaceId: string, campaignId: string): Promise<CampaignItem> {
+    return this.request<CampaignItem>(`/workspaces/${workspaceId}/campaigns/${campaignId}`);
+  }
+
   async createCampaign(workspaceId: string, payload: CreateCampaignPayload): Promise<CampaignItem> {
     return this.request<CampaignItem>(`/workspaces/${workspaceId}/campaigns`, {
       method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateCampaign(
+    workspaceId: string,
+    campaignId: string,
+    payload: Partial<CreateCampaignPayload>,
+  ): Promise<CampaignItem> {
+    return this.request<CampaignItem>(`/workspaces/${workspaceId}/campaigns/${campaignId}`, {
+      method: 'PATCH',
       body: JSON.stringify(payload),
     });
   }
@@ -1431,6 +2612,22 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  }
+
+  // Tracking & Links
+  async createTrackingLink(
+    workspaceId: string,
+    payload: CreateTrackingLinkPayload,
+  ): Promise<TrackingLinkItem> {
+    return this.request<TrackingLinkItem>(`/workspaces/${workspaceId}/tracking/links`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getTrackingLinks(workspaceId: string, campaignId?: string): Promise<TrackingLinkItem[]> {
+    const query = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : '';
+    return this.request<TrackingLinkItem[]>(`/workspaces/${workspaceId}/tracking/links${query}`);
   }
 
   // Tracking
@@ -1487,6 +2684,35 @@ class ApiClient {
     return this.request<DailyMetricPoint[]>(`/workspaces/${workspaceId}/analytics/timeseries${q}`);
   }
 
+  async getAnalyticsCampaigns(workspaceId: string, days?: number): Promise<CampaignAnalyticsItem[]> {
+    const q = days ? `?days=${days}` : '';
+    return this.request<CampaignAnalyticsItem[]>(`/workspaces/${workspaceId}/analytics/campaigns${q}`);
+  }
+
+  async getAnalyticsChannels(workspaceId: string, days?: number): Promise<ChannelAnalyticsItem[]> {
+    const q = days ? `?days=${days}` : '';
+    return this.request<ChannelAnalyticsItem[]>(`/workspaces/${workspaceId}/analytics/channels${q}`);
+  }
+
+  async getAnalyticsProducts(workspaceId: string, days?: number): Promise<ProductAnalyticsItem[]> {
+    const q = days ? `?days=${days}` : '';
+    return this.request<ProductAnalyticsItem[]>(`/workspaces/${workspaceId}/analytics/products${q}`);
+  }
+
+  async getAnalyticsRecentConversions(
+    workspaceId: string,
+    days?: number,
+    limit?: number,
+  ): Promise<RecentConversionItem[]> {
+    const params = new URLSearchParams();
+    if (days) params.set('days', String(days));
+    if (limit) params.set('limit', String(limit));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return this.request<RecentConversionItem[]>(
+      `/workspaces/${workspaceId}/analytics/conversions${qs}`,
+    );
+  }
+
   async getAnalyticsBestTimes(workspaceId: string): Promise<BestTimeRecommendation[]> {
     return this.request<BestTimeRecommendation[]>(
       `/workspaces/${workspaceId}/analytics/best-times`,
@@ -1508,6 +2734,462 @@ class ApiClient {
     }>(`/workspaces/${workspaceId}/analytics/export`, {
       method: 'POST',
       body: JSON.stringify({ format }),
+    });
+  }
+
+  // Super Admin
+  async getSuperAdminProfile(): Promise<SuperAdminProfile> {
+    return this.request<SuperAdminProfile>('/super-admin/me');
+  }
+
+  async getSuperAdminOverview(): Promise<SuperAdminDashboardOverview> {
+    return this.request<SuperAdminDashboardOverview>('/super-admin/dashboard/overview');
+  }
+
+  async getSuperAdminGrowth(days: number = 30): Promise<SuperAdminGrowthPoint[]> {
+    return this.request<SuperAdminGrowthPoint[]>(`/super-admin/dashboard/growth?days=${days}`);
+  }
+
+  async getSuperAdminHealth(): Promise<SuperAdminHealth> {
+    return this.request<SuperAdminHealth>('/super-admin/dashboard/health');
+  }
+
+  async getSuperAdminAuditLogs(params?: {
+    page?: number | undefined;
+    limit?: number | undefined;
+    action?: string | undefined;
+    targetType?: string | undefined;
+    actorEmail?: string | undefined;
+    startDate?: string | undefined;
+    endDate?: string | undefined;
+  }): Promise<SuperAdminAuditLogsResponse> {
+    const q = new URLSearchParams();
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.action) q.set('action', params.action);
+    if (params?.targetType) q.set('targetType', params.targetType);
+    if (params?.actorEmail) q.set('actorEmail', params.actorEmail);
+    if (params?.startDate) q.set('startDate', params.startDate);
+    if (params?.endDate) q.set('endDate', params.endDate);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<SuperAdminAuditLogsResponse>(`/super-admin/audit-logs${qs}`);
+  }
+
+  async getSuperAdminList(): Promise<PlatformAdminItem[]> {
+    return this.request<PlatformAdminItem[]>('/super-admin/admins');
+  }
+
+  async grantSuperAdmin(payload: {
+    email: string;
+    role: 'SUPER_ADMIN' | 'SUPPORT_ADMIN' | 'BILLING_ADMIN';
+    permissions?: string[] | undefined;
+    reason?: string | undefined;
+  }): Promise<PlatformAdminItem> {
+    return this.request<PlatformAdminItem>('/super-admin/admins', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateSuperAdmin(
+    adminId: string,
+    payload: {
+      role?: 'SUPER_ADMIN' | 'SUPPORT_ADMIN' | 'BILLING_ADMIN' | undefined;
+      status?: 'ACTIVE' | 'SUSPENDED' | 'REVOKED' | undefined;
+      permissions?: string[] | undefined;
+      suspensionReason?: string | undefined;
+    },
+  ): Promise<PlatformAdminItem> {
+    return this.request<PlatformAdminItem>(`/super-admin/admins/${adminId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getSuperAdminUsers(params?: {
+    page?: number | undefined;
+    limit?: number | undefined;
+    search?: string | undefined;
+    status?: string | undefined;
+  }): Promise<SuperAdminUsersResponse> {
+    const q = new URLSearchParams();
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.search) q.set('search', params.search);
+    if (params?.status) q.set('status', params.status);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<SuperAdminUsersResponse>(`/super-admin/users${qs}`);
+  }
+
+  async getSuperAdminUserDetails(userId: string): Promise<SuperAdminUserDetails> {
+    return this.request<SuperAdminUserDetails>(`/super-admin/users/${userId}`);
+  }
+
+  async suspendSuperAdminUser(
+    userId: string,
+    reason: string,
+  ): Promise<{ id: string; email: string; isSuspended: boolean }> {
+    return this.request(`/super-admin/users/${userId}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  async reactivateSuperAdminUser(
+    userId: string,
+  ): Promise<{ id: string; email: string; isSuspended: boolean }> {
+    return this.request(`/super-admin/users/${userId}/reactivate`, {
+      method: 'POST',
+    });
+  }
+
+  async revokeSuperAdminUserSessions(userId: string): Promise<{ userId: string; revokedCount: number }> {
+    return this.request(`/super-admin/users/${userId}/revoke-sessions`, {
+      method: 'POST',
+    });
+  }
+
+  async triggerSuperAdminUserPasswordReset(userId: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/super-admin/users/${userId}/password-reset`, {
+      method: 'POST',
+    });
+  }
+
+  async getSuperAdminWorkspaces(params?: {
+    page?: number | undefined;
+    limit?: number | undefined;
+    search?: string | undefined;
+    status?: string | undefined;
+    planTier?: string | undefined;
+  }): Promise<SuperAdminWorkspacesResponse> {
+    const q = new URLSearchParams();
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.search) q.set('search', params.search);
+    if (params?.status) q.set('status', params.status);
+    if (params?.planTier) q.set('planTier', params.planTier);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<SuperAdminWorkspacesResponse>(`/super-admin/workspaces${qs}`);
+  }
+
+  async getSuperAdminWorkspaceDetails(workspaceId: string): Promise<SuperAdminWorkspaceDetails> {
+    return this.request<SuperAdminWorkspaceDetails>(`/super-admin/workspaces/${workspaceId}`);
+  }
+
+  async suspendSuperAdminWorkspace(
+    workspaceId: string,
+    reason: string,
+  ): Promise<{ id: string; status: string }> {
+    return this.request(`/super-admin/workspaces/${workspaceId}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  async reactivateSuperAdminWorkspace(
+    workspaceId: string,
+  ): Promise<{ id: string; status: string }> {
+    return this.request(`/super-admin/workspaces/${workspaceId}/reactivate`, {
+      method: 'POST',
+    });
+  }
+
+  async purgeSuperAdminWorkspace(
+    workspaceId: string,
+    confirmSlug: string,
+    reason?: string,
+  ): Promise<{ success: boolean; workspaceId: string; workspaceName: string; purgedAt: string }> {
+    return this.request<{ success: boolean; workspaceId: string; workspaceName: string; purgedAt: string }>(
+      `/super-admin/workspaces/${workspaceId}/purge`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ confirmSlug, reason }),
+      },
+    );
+  }
+
+  async updateSuperAdminWorkspaceLimits(
+    workspaceId: string,
+    payload: { planTier?: string | undefined; customQuotas?: Record<string, unknown> | undefined },
+  ): Promise<{ id: string; planTier: string }> {
+    return this.request(`/super-admin/workspaces/${workspaceId}/limits`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getSuperAdminIntegrationsSummary(): Promise<SuperAdminIntegrationsSummary> {
+    return this.request<SuperAdminIntegrationsSummary>('/super-admin/integrations/summary');
+  }
+
+  async getSuperAdminIntegrationStores(params?: {
+    page?: number | undefined;
+    limit?: number | undefined;
+    search?: string | undefined;
+    platform?: string | undefined;
+    syncStatus?: string | undefined;
+  }): Promise<SuperAdminIntegrationStoresResponse> {
+    const q = new URLSearchParams();
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.search) q.set('search', params.search);
+    if (params?.platform) q.set('platform', params.platform);
+    if (params?.syncStatus) q.set('syncStatus', params.syncStatus);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<SuperAdminIntegrationStoresResponse>(`/super-admin/integrations/stores${qs}`);
+  }
+
+  async getSuperAdminIntegrationSocial(params?: {
+    page?: number | undefined;
+    limit?: number | undefined;
+    search?: string | undefined;
+    provider?: string | undefined;
+    status?: string | undefined;
+  }): Promise<SuperAdminIntegrationSocialResponse> {
+    const q = new URLSearchParams();
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.search) q.set('search', params.search);
+    if (params?.provider) q.set('provider', params.provider);
+    if (params?.status) q.set('status', params.status);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<SuperAdminIntegrationSocialResponse>(`/super-admin/integrations/social${qs}`);
+  }
+
+  async triggerSuperAdminStoreSync(storeId: string): Promise<{
+    connectionId: string;
+    storeName: string;
+    platform: string;
+    syncResult: Record<string, unknown>;
+  }> {
+    return this.request(`/super-admin/integrations/stores/${storeId}/sync`, {
+      method: 'POST',
+    });
+  }
+
+  async updateSuperAdminSocialStatus(
+    accountId: string,
+    status: 'ACTIVE' | 'EXPIRED' | 'REVOKED' | 'DISCONNECTED',
+    reason?: string | undefined,
+  ): Promise<{ id: string; status: string }> {
+    return this.request(`/super-admin/integrations/social/${accountId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, reason }),
+    });
+  }
+
+  // --- SUPER ADMIN BILLING & SUBSCRIPTIONS ---
+
+  async getSuperAdminBillingSummary(): Promise<SuperAdminBillingSummary> {
+    return this.request<SuperAdminBillingSummary>('/super-admin/billing/summary');
+  }
+
+  async getSuperAdminSubscriptions(params?: {
+    page?: number | undefined;
+    limit?: number | undefined;
+    status?: string | undefined;
+    planId?: string | undefined;
+    search?: string | undefined;
+  }): Promise<SuperAdminSubscriptionsResponse> {
+    const q = new URLSearchParams();
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.status) q.set('status', params.status);
+    if (params?.planId) q.set('planId', params.planId);
+    if (params?.search) q.set('search', params.search);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<SuperAdminSubscriptionsResponse>(`/super-admin/billing/subscriptions${qs}`);
+  }
+
+  async cancelSuperAdminSubscription(
+    id: string,
+    payload: { reason: string; immediate?: boolean | undefined },
+  ): Promise<SuperAdminSubscriptionItem> {
+    return this.request<SuperAdminSubscriptionItem>(`/super-admin/billing/subscriptions/${id}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getSuperAdminPlans(): Promise<BillingPlanItem[]> {
+    return this.request<BillingPlanItem[]>('/super-admin/billing/plans');
+  }
+
+  async createSuperAdminPlan(payload: {
+    id: string;
+    name: string;
+    description: string;
+    priceCents: number;
+    currency?: string;
+    billingInterval?: 'month' | 'year';
+    maxMonthlyPosts: number;
+    maxMonthlyAiWords: number;
+    maxSocialAccounts: number;
+    maxTeamMembers: number;
+    features: string[];
+    isActive?: boolean;
+  }): Promise<BillingPlanItem> {
+    return this.request<BillingPlanItem>('/super-admin/billing/plans', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateSuperAdminPlan(
+    id: string,
+    payload: Partial<{
+      name: string;
+      description: string;
+      priceCents: number;
+      currency: string;
+      billingInterval: 'month' | 'year';
+      maxMonthlyPosts: number;
+      maxMonthlyAiWords: number;
+      maxSocialAccounts: number;
+      maxTeamMembers: number;
+      features: string[];
+      isActive: boolean;
+    }>,
+  ): Promise<BillingPlanItem> {
+    return this.request<BillingPlanItem>(`/super-admin/billing/plans/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteSuperAdminPlan(id: string): Promise<{ success: boolean; deletedPlanId: string }> {
+    return this.request<{ success: boolean; deletedPlanId: string }>(`/super-admin/billing/plans/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- SUPER ADMIN AI & TOKENS ---
+
+  async getSuperAdminAiSummary(): Promise<SuperAdminAiSummary> {
+    return this.request<SuperAdminAiSummary>('/super-admin/ai/summary');
+  }
+
+  async getSuperAdminAiUsage(params?: {
+    page?: number | undefined;
+    limit?: number | undefined;
+    provider?: string | undefined;
+    model?: string | undefined;
+    workspaceId?: string | undefined;
+    feature?: string | undefined;
+  }): Promise<SuperAdminAiUsageResponse> {
+    const q = new URLSearchParams();
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.provider) q.set('provider', params.provider);
+    if (params?.model) q.set('model', params.model);
+    if (params?.workspaceId) q.set('workspaceId', params.workspaceId);
+    if (params?.feature) q.set('feature', params.feature);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<SuperAdminAiUsageResponse>(`/super-admin/ai/usage${qs}`);
+  }
+
+  async getSuperAdminTopAiTenants(): Promise<SuperAdminTopAiTenant[]> {
+    return this.request<SuperAdminTopAiTenant[]>('/super-admin/ai/top-tenants');
+  }
+
+  // --- SUPER ADMIN BACKGROUND JOBS ---
+
+  async getSuperAdminJobsOverview(): Promise<SuperAdminJobsOverview> {
+    return this.request<SuperAdminJobsOverview>('/super-admin/jobs/overview');
+  }
+
+  async retrySuperAdminFailedJobs(): Promise<{ retriedPosts: number; retriedImports: number }> {
+    return this.request<{ retriedPosts: number; retriedImports: number }>('/super-admin/jobs/retry-failed', {
+      method: 'POST',
+    });
+  }
+
+  // --- SUPER ADMIN PLATFORM SETTINGS & ANNOUNCEMENTS ---
+
+  async getSuperAdminPlatformSettings(): Promise<SuperAdminPlatformSetting[]> {
+    return this.request<SuperAdminPlatformSetting[]>('/super-admin/settings');
+  }
+
+  async updateSuperAdminPlatformSetting(
+    key: string,
+    payload: { value: unknown; description?: string | undefined; isPublic?: boolean | undefined },
+  ): Promise<SuperAdminPlatformSetting> {
+    return this.request<SuperAdminPlatformSetting>(`/super-admin/settings/${key}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getSuperAdminAnnouncements(): Promise<SuperAdminAnnouncement[]> {
+    return this.request<SuperAdminAnnouncement[]>('/super-admin/announcements');
+  }
+
+  async createSuperAdminAnnouncement(payload: {
+    title: string;
+    content: string;
+    audience?: string | undefined;
+    isPublished?: boolean | undefined;
+    expiresAt?: string | undefined;
+  }): Promise<SuperAdminAnnouncement> {
+    return this.request<SuperAdminAnnouncement>('/super-admin/announcements', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateSuperAdminAnnouncement(
+    id: string,
+    payload: {
+      title?: string | undefined;
+      content?: string | undefined;
+      audience?: string | undefined;
+      isPublished?: boolean | undefined;
+      expiresAt?: string | undefined;
+    },
+  ): Promise<SuperAdminAnnouncement> {
+    return this.request<SuperAdminAnnouncement>(`/super-admin/announcements/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteSuperAdminAnnouncement(id: string): Promise<{ success: boolean; id: string }> {
+    return this.request<{ success: boolean; id: string }>(`/super-admin/announcements/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- SUPER ADMIN EMAIL MANAGEMENT & DIAGNOSTICS ---
+
+  async getSuperAdminEmailStatus(): Promise<SuperAdminEmailStatus> {
+    return this.request<SuperAdminEmailStatus>('/super-admin/email/status');
+  }
+
+  async verifySuperAdminEmailConnection(
+    provider?: string,
+  ): Promise<SuperAdminEmailVerificationResult> {
+    return this.request<SuperAdminEmailVerificationResult>('/super-admin/email/verify', {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    });
+  }
+
+  async sendSuperAdminTestEmail(
+    to: string,
+    provider?: string,
+  ): Promise<SuperAdminEmailTestResult> {
+    return this.request<SuperAdminEmailTestResult>('/super-admin/email/test', {
+      method: 'POST',
+      body: JSON.stringify({ to, provider }),
+    });
+  }
+  async deleteWorkspace(
+    workspaceId: string,
+    confirmSlug: string,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/workspaces/${workspaceId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirmSlug }),
     });
   }
 }

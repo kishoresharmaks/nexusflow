@@ -6,6 +6,16 @@ import {
   type PublishAttempt,
 } from '@commercepilot/database';
 import { decryptToken } from '../crypto.util';
+import {
+  DEFAULT_META_GRAPH_API_VERSION,
+  publishInstagramFeedPost,
+  validateInstagramCaption,
+  validateInstagramMediaUrls,
+} from '../providers/instagram-graph.client';
+import {
+  isAmbiguousErrorCode,
+  RECONCILIATION_INITIAL_DELAY_MS,
+} from './post-reconciliation.processor';
 
 export interface PostPublishingJobData {
   postId: string;
@@ -19,6 +29,11 @@ export interface PostPublishingResult {
   providerPostId?: string | undefined;
   errorCode?: string | undefined;
 }
+
+/** Bounded retry ceiling for transient failures before a post is marked FAILED. */
+export const MAX_PUBLISH_ATTEMPTS = 3;
+const TRANSIENT_BACKOFF_BASE_MS = 30_000;
+const TRANSIENT_BACKOFF_MAX_MS = 5 * 60 * 1000;
 
 /**
  * Process publication of a scheduled post.
@@ -207,74 +222,39 @@ export async function processPostPublishing(
           providerRequestId = res.headers.get('x-li-uuid') ?? `req_li_${Date.now()}`;
         }
       } else if (isInstagram) {
-        // Step 1: Create IG media container
-        const isVideo = post.mediaUrls[0]?.match(/\.(mp4|mov)(\?.*)?$/i);
-        const containerBody: Record<string, string> = {
-          access_token: accessToken,
-          caption: post.content,
-        };
-        if (isVideo) {
-          containerBody['media_type'] = 'VIDEO';
-          containerBody['video_url'] = post.mediaUrls[0]!;
-        } else if (post.mediaUrls[0]) {
-          containerBody['image_url'] = post.mediaUrls[0]!;
-        }
-
-        const containerRes = await fetch(
-          `https://graph.facebook.com/v19.0/${socialAccount.providerAccountId}/media`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(containerBody),
-          },
-        );
-
-        const containerData = (await containerRes.json()) as {
-          id?: string;
-          error?: { code: number; message: string };
-        };
-
-        if (!containerRes.ok || !containerData.id || containerData.error) {
-          const errCode = containerData.error?.code ?? containerRes.status;
-          errorCode = `META_ERR_${errCode}`;
-          errorMessage = containerData.error?.message ?? 'Instagram container creation failed.';
-          isTransient = errCode === 4 || errCode === 17 || errCode === 2 || containerRes.status >= 500;
+        const captionError = validateInstagramCaption(post.content);
+        const mediaError = validateInstagramMediaUrls(post.mediaUrls);
+        if (captionError || mediaError) {
+          const validation = captionError ?? mediaError!;
+          errorCode = validation.errorCode;
+          errorMessage = validation.errorMessage;
+          isTransient = false;
         } else {
-          // Step 2: Publish container
-          const publishRes = await fetch(
-            `https://graph.facebook.com/v19.0/${socialAccount.providerAccountId}/media_publish`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                creation_id: containerData.id,
-                access_token: accessToken,
-              }),
-            },
-          );
+          const graphResult = await publishInstagramFeedPost({
+            igUserId: socialAccount.providerAccountId,
+            accessToken,
+            caption: post.content,
+            mediaUrls: post.mediaUrls,
+            graphApiVersion: process.env['META_GRAPH_API_VERSION'] || DEFAULT_META_GRAPH_API_VERSION,
+          });
 
-          const publishData = (await publishRes.json()) as {
-            id?: string;
-            error?: { code: number; message: string };
-          };
-
-          if (!publishRes.ok || !publishData.id || publishData.error) {
-            const errCode = publishData.error?.code ?? publishRes.status;
-            errorCode = `META_ERR_${errCode}`;
-            errorMessage = publishData.error?.message ?? 'Instagram container publish failed.';
-            isTransient = errCode === 4 || errCode === 17 || errCode === 2 || publishRes.status >= 500;
-          } else {
+          if (graphResult.success) {
             success = true;
-            providerPostId = publishData.id;
-            providerRequestId = publishRes.headers.get('x-fb-request-id') ?? `req_${Date.now()}`;
+            providerPostId = graphResult.providerPostId;
+            providerRequestId = graphResult.providerRequestId;
+          } else {
+            errorCode = graphResult.errorCode;
+            errorMessage = graphResult.errorMessage;
+            isTransient = graphResult.ambiguous ? false : graphResult.isTransient;
           }
         }
       } else {
         // Facebook Page publication
         const hasMedia = post.mediaUrls.length > 0;
+        const graphVersion = process.env['META_GRAPH_API_VERSION'] || DEFAULT_META_GRAPH_API_VERSION;
         const endpoint = hasMedia
-          ? `https://graph.facebook.com/v19.0/${socialAccount.providerAccountId}/photos`
-          : `https://graph.facebook.com/v19.0/${socialAccount.providerAccountId}/feed`;
+          ? `https://graph.facebook.com/${graphVersion}/${socialAccount.providerAccountId}/photos`
+          : `https://graph.facebook.com/${graphVersion}/${socialAccount.providerAccountId}/feed`;
 
         const body: Record<string, string> = {
           access_token: accessToken,
@@ -305,18 +285,25 @@ export async function processPostPublishing(
         }
       }
     } catch (networkErr) {
-      errorCode = 'NETWORK_TIMEOUT';
+      errorCode = 'AMBIGUOUS_PUBLISH_OUTCOME';
       errorMessage = (networkErr as Error).message || 'Ambiguous outcome: network error contacting Meta.';
-      isTransient = true;
+      isTransient = false;
     }
   }
+
+  const isAmbiguous = isAmbiguousErrorCode(errorCode);
+  const attemptStatus = success
+    ? AttemptStatus.SUCCESS
+    : isAmbiguous
+      ? AttemptStatus.UNKNOWN
+      : AttemptStatus.FAILED;
 
   // 5. Persist PublishAttempt record
   await prisma.publishAttempt.create({
     data: {
       postId: post.id,
       attemptNumber,
-      status: success ? AttemptStatus.SUCCESS : AttemptStatus.FAILED,
+      status: attemptStatus,
       providerRequestId: providerRequestId ?? null,
       errorCode: errorCode ?? null,
       errorMessage: errorMessage ?? null,
@@ -341,11 +328,17 @@ export async function processPostPublishing(
       status: updated.status,
       providerPostId: updated.providerPostId ?? undefined,
     };
-  } else {
+  }
+
+  if (isAmbiguous) {
+    // Outcome unknown: do NOT mark FAILED (a blind retry could duplicate).
+    // Persist an UNKNOWN_OUTCOME state and schedule reconciliation to verify.
     const updated = await prisma.post.update({
       where: { id: postId },
       data: {
-        status: PostStatus.FAILED,
+        status: PostStatus.UNKNOWN_OUTCOME,
+        reconciliationAttempts: 0,
+        reconciliationDueAt: new Date(Date.now() + RECONCILIATION_INITIAL_DELAY_MS),
       },
     });
 
@@ -356,4 +349,42 @@ export async function processPostPublishing(
       errorCode,
     };
   }
+
+  if (isTransient && attemptNumber < MAX_PUBLISH_ATTEMPTS) {
+    // Bounded retry: re-schedule with exponential backoff. The always-running
+    // fallback scheduler picks the post up again once it becomes due.
+    const backoffMs = Math.min(
+      TRANSIENT_BACKOFF_MAX_MS,
+      TRANSIENT_BACKOFF_BASE_MS * 2 ** (attemptNumber - 1),
+    );
+    const updated = await prisma.post.update({
+      where: { id: postId },
+      data: {
+        status: PostStatus.SCHEDULED,
+        scheduledAt: new Date(Date.now() + backoffMs),
+      },
+    });
+
+    return {
+      postId: post.id,
+      success: false,
+      status: updated.status,
+      errorCode,
+    };
+  }
+
+  // Permanent failure, or transient retries exhausted.
+  const updated = await prisma.post.update({
+    where: { id: postId },
+    data: {
+      status: PostStatus.FAILED,
+    },
+  });
+
+  return {
+    postId: post.id,
+    success: false,
+    status: updated.status,
+    errorCode,
+  };
 }
