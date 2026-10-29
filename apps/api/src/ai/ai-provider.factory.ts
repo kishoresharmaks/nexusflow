@@ -27,10 +27,16 @@ export class AiProviderFactory {
 
     const isProduction = nodeEnv === 'production' || nodeEnv === 'staging';
 
-    if (isProduction) {
+    const allowMock = (
+      this.configService.get<string>('ALLOW_MOCK_AI') ||
+      process.env['ALLOW_MOCK_AI'] ||
+      'false'
+    ).toLowerCase() === 'true';
+
+    if (isProduction && !allowMock) {
       if (providerName !== 'gemini' || !apiKey || apiKey === 'replace-me') {
         throw new Error(
-          `Production / Staging startup failed: A live verified AI provider (e.g. Gemini with valid AI_TEXT_API_KEY) must be configured. Mock AI is strictly prohibited in production and staging environments.`,
+          `Production / Staging startup failed: A live verified AI provider (e.g. Gemini with valid AI_TEXT_API_KEY) must be configured. Set ALLOW_MOCK_AI=true in .env to bypass during deployment testing.`,
         );
       }
     }
